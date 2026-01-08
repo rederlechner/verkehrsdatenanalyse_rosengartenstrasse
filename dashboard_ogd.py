@@ -78,17 +78,15 @@ def load_current_year_from_ogd(year):
 
 
 @st.cache_data(ttl=3600)
-def load_data():
+def load_data_for_years(selected_years):
     """
-    Lädt alle verfügbaren Jahresdaten direkt vom OGD Portal und kombiniert sie.
-    Daten sind ab 2020 verfügbar.
+    Lädt nur die ausgewählten Jahresdaten vom OGD Portal.
     """
     current_year = datetime.now().year
-    start_year = 2020  # Daten beginnen 2020
     
     dfs = []
     
-    for year in range(start_year, current_year + 1):
+    for year in selected_years:
         if year == current_year:
             # Aktuelles Jahr: kürzerer Cache (1h)
             df = load_current_year_from_ogd(year)
@@ -100,7 +98,6 @@ def load_data():
             dfs.append(df)
     
     if not dfs:
-        st.error("Keine Daten konnten geladen werden.")
         return None
     
     data = pd.concat(dfs, ignore_index=True)
@@ -117,6 +114,7 @@ def load_data():
     data['Stunde'] = data['Datum'].dt.hour
     data['Kalenderwoche'] = data['Datum'].dt.isocalendar().week
     data['Datum_Tag'] = data['Datum'].dt.date
+    
     
     # Fahrzeugkategorien (zusammengefasst)
     kategorie_mapping = {
@@ -225,24 +223,32 @@ def main():
     st.title("🚗 Verkehrsdaten Rosengartenbrücke (OGD)")
     st.markdown("**Stündliche Verkehrszählung nach Fahrzeugtypen** | Datenquelle: [Open Data Zürich](https://data.stadt-zuerich.ch/dataset/ugz_verkehrsdaten_stundenwerte_rosengartenbruecke)")
     
-    # Daten laden
-    with st.spinner("Daten werden von data.stadt-zuerich.ch geladen..."):
-        data = load_data()
+    # --- SIDEBAR: Filter ---
+    st.sidebar.header("🔍 Filter")
+    
+    # Verfügbare Jahre (2020 bis aktuelles Jahr)
+    current_year = datetime.now().year
+    available_years = list(range(2020, current_year + 1))
+    
+    # Jahresfilter - ZUERST wählen, dann laden
+    selected_jahre = st.sidebar.multiselect(
+        "Jahre",
+        options=available_years,
+        default=[current_year],
+        help="Wählen Sie die Jahre aus, die geladen werden sollen"
+    )
+    
+    if not selected_jahre:
+        st.warning("Bitte wählen Sie mindestens ein Jahr aus.")
+        return
+    
+    # Daten nur für ausgewählte Jahre laden
+    with st.spinner(f"Daten für {', '.join(map(str, selected_jahre))} werden geladen..."):
+        data = load_data_for_years(tuple(sorted(selected_jahre)))
     
     if data is None or data.empty:
         st.error("Keine Daten verfügbar.")
         return
-    
-    # --- SIDEBAR: Filter ---
-    st.sidebar.header("🔍 Filter")
-    
-    # Jahresfilter
-    jahre = sorted(data['Jahr'].unique())
-    selected_jahre = st.sidebar.multiselect(
-        "Jahre",
-        options=jahre,
-        default=[max(jahre)]
-    )
     
     # Richtungsfilter
     richtungen = data['Richtung'].unique().tolist()
@@ -271,12 +277,11 @@ def main():
     selected_wochentag_ids = [wochentag_map[w] for w in selected_wochentage]
     
     # Daten filtern
-    if not selected_jahre or not selected_richtungen or not selected_klassen or not selected_wochentage:
+    if not selected_richtungen or not selected_klassen or not selected_wochentage:
         st.warning("Bitte wählen Sie mindestens einen Wert für jeden Filter.")
         return
     
     filtered = data[
-        (data['Jahr'].isin(selected_jahre)) &
         (data['Richtung'].isin(selected_richtungen)) &
         (data['Klasse.Text'].isin(selected_klassen)) &
         (data['Wochentag'].isin(selected_wochentag_ids))

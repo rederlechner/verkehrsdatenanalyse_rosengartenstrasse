@@ -363,7 +363,7 @@ def main():
         col_chart, col_stats = st.columns([3, 1])
         
         with col_chart:
-            st.plotly_chart(fig_7_tage, use_container_width=True)
+            st.plotly_chart(fig_7_tage, width='stretch')
         
         with col_stats:
             # Statistiken für die letzten 7 Tage
@@ -412,7 +412,7 @@ def main():
         )
         fig_hourly_dir.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
         fig_hourly_dir.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=2), hovermode='x unified', title='Tagesverlauf')
-        st.plotly_chart(fig_hourly_dir, use_container_width=True)
+        st.plotly_chart(fig_hourly_dir, width='stretch')
     
     with col_right:
         # Wochenverlauf nach Richtung
@@ -428,7 +428,7 @@ def main():
         )
         fig_weekly_dir.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
         fig_weekly_dir.update_layout(title='Wochenverlauf')
-        st.plotly_chart(fig_weekly_dir, use_container_width=True)
+        st.plotly_chart(fig_weekly_dir, width='stretch')
     
     # Zeile 1b: Tagesverlauf und Wochenverlauf nach Jahr
     if len(selected_jahre) > 1:
@@ -445,7 +445,7 @@ def main():
             )
             fig_hourly_yr.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
             fig_hourly_yr.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=2), hovermode='x unified', title='Tagesverlauf')
-            st.plotly_chart(fig_hourly_yr, use_container_width=True)
+            st.plotly_chart(fig_hourly_yr, width='stretch')
         
         with col_right_yr:
             daily_totals_yr = filtered.groupby(['Datum_Tag', 'Wochentag', 'Jahr'])['Anzahl'].sum().reset_index()
@@ -461,7 +461,7 @@ def main():
             )
             fig_weekly_yr.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
             fig_weekly_yr.update_layout(title='Wochenverlauf')
-            st.plotly_chart(fig_weekly_yr, use_container_width=True)
+            st.plotly_chart(fig_weekly_yr, width='stretch')
     
     # === TAGESVERLAUF PRO WOCHENTAG ===
     st.markdown("---")
@@ -489,7 +489,7 @@ def main():
                     yaxis=dict(title='Ø Fz/h'), height=250,
                     margin=dict(l=40, r=20, t=40, b=30), hovermode='x unified'
                 )
-                st.plotly_chart(fig_wt, use_container_width=True)
+                st.plotly_chart(fig_wt, width='stretch')
             else:
                 st.info(f"Keine Daten für {wochentag_namen_full[idx]}")
     
@@ -512,7 +512,7 @@ def main():
                     yaxis=dict(title='Ø Fz/h'), height=250,
                     margin=dict(l=40, r=20, t=40, b=30), hovermode='x unified'
                 )
-                st.plotly_chart(fig_wt, use_container_width=True)
+                st.plotly_chart(fig_wt, width='stretch')
             else:
                 st.info(f"Keine Daten für {wochentag_namen_full[idx]}")
     
@@ -537,7 +537,7 @@ def main():
             margin=dict(l=40, r=20, t=40, b=30), hovermode='x unified',
             legend=dict(font=dict(size=9), orientation='h', yanchor='bottom', y=-0.4, xanchor='center', x=0.5)
         )
-        st.plotly_chart(fig_compare, use_container_width=True)
+        st.plotly_chart(fig_compare, width='stretch')
     
     # Zeile 2: Fahrzeugklassen und Richtungen
     col_left2, col_right2 = st.columns(2)
@@ -562,7 +562,7 @@ def main():
             fig_classes.update_traces(texttemplate='%{text:.1f}%', textposition='outside',
                                        hovertemplate='%{y}: %{customdata[0]} (%{customdata[1]} Fz.)<extra></extra>')
             fig_classes.update_layout(showlegend=False, xaxis=dict(range=[0, 100]))
-            st.plotly_chart(fig_classes, use_container_width=True)
+            st.plotly_chart(fig_classes, width='stretch')
         
         with tab_kategorie:
             kategorie_farben = {
@@ -584,7 +584,7 @@ def main():
             fig_kategorien.update_traces(texttemplate='%{text:.1f}%', textposition='outside',
                                           hovertemplate='%{y}: %{customdata[0]} (%{customdata[1]} Fz.)<extra></extra>')
             fig_kategorien.update_layout(showlegend=False, xaxis=dict(range=[0, 100]))
-            st.plotly_chart(fig_kategorien, use_container_width=True)
+            st.plotly_chart(fig_kategorien, width='stretch')
     
     with col_right2:
         st.subheader("↔️ Richtungsvergleich")
@@ -598,7 +598,7 @@ def main():
         )
         fig_direction.update_traces(textposition='inside', textinfo='percent+label',
                                      hovertemplate='%{label}: %{customdata[0]} (%{customdata[1]:.1f}%)<extra></extra>')
-        st.plotly_chart(fig_direction, use_container_width=True)
+        st.plotly_chart(fig_direction, width='stretch')
     
     # Zeile 2b: Fahrzeugkategorien im Zeitverlauf
     if len(selected_jahre) > 1:
@@ -655,9 +655,9 @@ def main():
         
         tab_line, tab_area = st.tabs(["📈 Liniendiagramm", "📊 Flächendiagramm"])
         with tab_line:
-            st.plotly_chart(fig_cat_trend, use_container_width=True, key="cat_line")
+            st.plotly_chart(fig_cat_trend, width='stretch', key="cat_line")
         with tab_area:
-            st.plotly_chart(fig_cat_area, use_container_width=True, key="cat_area")
+            st.plotly_chart(fig_cat_area, width='stretch', key="cat_area")
     
     # Zeile 3: Monatstrend
     st.markdown("---")
@@ -706,7 +706,7 @@ def main():
                            y0=0, y1=1, line=dict(color="rgba(0,0,0,0.3)", width=1, dash="dash")))
     
     fig_trend.update_layout(hovermode='x unified', bargap=0.1, shapes=shapes, annotations=annotations, margin=dict(t=40))
-    st.plotly_chart(fig_trend, use_container_width=True)
+    st.plotly_chart(fig_trend, width='stretch')
     st.caption("🔒 Rot = COVID-19 Lockdown (März-Mai 2020) | ☀️ Gelb = Sommerferien Zürich (Juli/August)")
     
     # Zeile 3b: Jahresverlauf (Wochenschnitt)
@@ -765,7 +765,7 @@ def main():
     
     fig_weekly.update_layout(xaxis=dict(tickmode='linear', tick0=1, dtick=4, range=[0.5, 52.5]),
                               hovermode='x unified', shapes=weekly_shapes, annotations=weekly_annotations, margin=dict(t=40))
-    st.plotly_chart(fig_weekly, use_container_width=True)
+    st.plotly_chart(fig_weekly, width='stretch')
     st.caption("🔒 Rot = COVID-19 Lockdown (KW 12-20, 2020) | ☀️ Gelb = Sommerferien (KW 28-33) | 🎄 Grün = Weihnachten/Neujahr")
     
     # Zeile 4: Heatmap
@@ -795,7 +795,7 @@ def main():
     fig_heatmap.update_traces(hovertemplate='%{y}<br>%{x}:00 Uhr<br>%{customdata}<extra></extra>',
                                customdata=heatmap_hover.values)
     fig_heatmap.update_layout(height=350)
-    st.plotly_chart(fig_heatmap, use_container_width=True)
+    st.plotly_chart(fig_heatmap, width='stretch')
     
     # Zeile 5: Jahresvergleich
     if len(selected_jahre) > 1:
@@ -854,7 +854,7 @@ def main():
                 text='Anzahl_fmt', color_discrete_sequence=['#3498db', '#e74c3c'], custom_data=['Anzahl_fmt']
             )
             fig_yearly.update_traces(textposition='outside', hovertemplate='%{customdata[0]}<extra></extra>')
-            st.plotly_chart(fig_yearly, use_container_width=True)
+            st.plotly_chart(fig_yearly, width='stretch')
         
         with tab_total:
             yearly_sum = filtered.groupby(['Jahr', 'Richtung'])['Anzahl'].sum().reset_index()
@@ -885,7 +885,7 @@ def main():
                 text='Anzahl_fmt', color_discrete_sequence=['#3498db', '#e74c3c'], custom_data=['Anzahl_fmt']
             )
             fig_yearly_sum.update_traces(textposition='outside', hovertemplate='%{customdata[0]}<extra></extra>')
-            st.plotly_chart(fig_yearly_sum, use_container_width=True)
+            st.plotly_chart(fig_yearly_sum, width='stretch')
             st.caption("💡 **Hinweis:** Die Gesamtzahlen sind bei Datenlücken nicht direkt vergleichbar.")
     
     # Zeile 6: Datenqualität
@@ -914,7 +914,7 @@ def main():
                 'Dauer': f"{g['duration_h']:.1f}h" if g['duration_h'] < 24 else f"{g['duration_h']/24:.1f} Tage",
                 'Jahr': g['start'].year
             } for g in significant_gaps])
-            st.dataframe(gap_df, use_container_width=True, hide_index=True)
+            st.dataframe(gap_df, width='stretch', hide_index=True)
         else:
             st.success("Keine signifikanten Datenlücken gefunden.")
         
@@ -929,7 +929,7 @@ def main():
             'Vollständigkeit': f"{s['completeness']:.1f}%",
             'Fehlende Tage': f"{s['gap_days']:.1f}" if s['gap_days'] > 0 else "–"
         } for s in gap_analysis['yearly_stats']])
-        st.dataframe(yearly_df, use_container_width=True, hide_index=True)
+        st.dataframe(yearly_df, width='stretch', hide_index=True)
         
         if significant_gaps:
             biggest = max(significant_gaps, key=lambda x: x['duration_h'])

@@ -14,8 +14,6 @@ import numpy as np
 import requests
 from io import BytesIO
 import urllib3
-import os
-from pathlib import Path
 
 # SSL-Warnungen unterdrücken (für OGD-Server mit Zertifikatsproblemen)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -28,9 +26,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# OGD Base URL und lokaler Datenpfad
+# OGD Base URL
 OGD_BASE_URL = "https://data.stadt-zuerich.ch/dataset/ugz_verkehrsdaten_stundenwerte_rosengartenbruecke/download/"
-DATA_DIR = Path(__file__).parent / "data" / "ogd"
 
 # Farbschema für Fahrzeugklassen
 FARBEN = {
@@ -54,129 +51,27 @@ def get_ogd_url(year):
     return f"{OGD_BASE_URL}ugz_ogd_traffic_rosengartenbruecke_h1_{year}.csv"
 
 
-def get_local_file_path(year):
-    """Generiert den lokalen Dateipfad für ein bestimmtes Jahr."""
-    return DATA_DIR / f"ugz_ogd_traffic_rosengartenbruecke_h1_{year}.csv"
-
-
-def is_year_data_complete(df, year):
-    """
-    Prüft, ob die Daten eines Jahres vollständig sind.
-    Ein Jahr gilt als vollständig, wenn Daten bis mindestens 31. Dezember vorhanden sind.
-    """
-    if df is None or df.empty:
-        return False
-    
-    # Prüfe ob Daten vom Dezember vorhanden sind
-    if 'Datum' not in df.columns:
-        return False
-    
-    dates = pd.to_datetime(df['Datum'], format='ISO8601')
-    max_date = dates.max()
-    
-    # Timezone entfernen für Vergleich (tz-naive)
-    if max_date.tzinfo is not None:
-        max_date = max_date.tz_localize(None)
-    
-    # Jahr gilt als vollständig wenn letzter Datenpunkt >= 31. Dezember ist
-    return max_date >= pd.Timestamp(year=year, month=12, day=31)
-
-
-def download_from_ogd(year):
-    """Lädt Daten für ein bestimmtes Jahr von der OGD-Plattform."""
+@st.cache_data(ttl=86400)  # 24h Cache für historische Jahre
+def load_year_from_ogd(year):
+    """Lädt Daten für ein Jahr direkt vom OGD Portal."""
     url = get_ogd_url(year)
     try:
         response = requests.get(url, timeout=60, verify=False)
         response.raise_for_status()
-        return response.content
+        return pd.read_csv(BytesIO(response.content), encoding='utf-8-sig')
     except requests.exceptions.RequestException as e:
-        st.warning(f"Fehler beim Laden der Daten für {year} vom OGD Portal: {e}")
+        st.warning(f"Fehler beim Laden der Daten für {year}: {e}")
         return None
 
 
-def save_to_local(content, year):
-    """Speichert die heruntergeladenen Daten lokal."""
-    file_path = get_local_file_path(year)
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with open(file_path, 'wb') as f:
-        f.write(content)
-    return file_path
-
-
-def load_local_file(year):
-    """Lädt Daten aus einer lokalen Datei."""
-    file_path = get_local_file_path(year)
-    if file_path.exists():
-        try:
-            df = pd.read_csv(file_path, encoding='utf-8-sig')
-            return df
-        except Exception as e:
-            st.warning(f"Fehler beim Laden der lokalen Datei für {year}: {e}")
-            return None
-    return None
-
-
-@st.cache_data(ttl=86400)  # 24h Cache für historische Jahre
-def load_year_data_cached(year):
-    """Lädt Daten für ein historisches Jahr (mit langem Cache)."""
-    # Zuerst lokale Datei versuchen
-    df = load_local_file(year)
-    if df is not None:
-        return df
-    # Falls keine lokale Datei, vom OGD Portal laden
-    content = download_from_ogd(year)
-    if content:
-        try:
-            save_to_local(content, year)
-        except Exception:
-            pass  # Auf Streamlit Cloud kann nicht geschrieben werden
-        return pd.read_csv(BytesIO(content), encoding='utf-8-sig')
-    return None
-
-
 @st.cache_data(ttl=3600)  # 1h Cache für aktuelles Jahr
-def load_current_year_data(year):
-    """Lädt Daten für das aktuelle Jahr vom OGD Portal und speichert sie lokal."""
-    # Immer vom OGD Portal laden für das aktuelle Jahr
-    content = download_from_ogd(year)
-    if content:
-        save_to_local(content, year)
-        df = pd.read_csv(BytesIO(content), encoding='utf-8-sig')
-        return df
-    # Fallback: lokale Datei verwenden
-    return load_local_file(year)
-
-
-def check_and_update_previous_year(previous_year):
-    """
-    Prüft nach Jahreswechsel, ob der Datensatz des letzten Jahres vollständig ist.
-    Falls nicht, wird er vom OGD Portal aktualisiert.
-    """
-    local_df = load_local_file(previous_year)
-    
-    if local_df is None or not is_year_data_complete(local_df, previous_year):
-        content = download_from_ogd(previous_year)
-        if content:
-            try:
-                save_to_local(content, previous_year)
-                # Cache leeren für dieses Jahr
-                load_year_data_cached.clear()
-            except Exception:
-                pass  # Auf Streamlit Cloud kann nicht geschrieben werden
-            return pd.read_csv(BytesIO(content), encoding='utf-8-sig')
-    
-    return local_df
-
-
-def download_year_data(year):
-    """Lädt Daten für ein bestimmtes Jahr von der OGD-Plattform (Legacy-Funktion)."""
+def load_current_year_from_ogd(year):
+    """Lädt Daten für das aktuelle Jahr vom OGD Portal (kürzerer Cache)."""
     url = get_ogd_url(year)
     try:
-        # verify=False um SSL-Zertifikatsprobleme zu umgehen
-        response = requests.get(url, timeout=30, verify=False)
+        response = requests.get(url, timeout=60, verify=False)
         response.raise_for_status()
-        df = pd.read_csv(BytesIO(response.content), encoding='utf-8-sig')
-        return df
+        return pd.read_csv(BytesIO(response.content), encoding='utf-8-sig')
     except requests.exceptions.RequestException as e:
         st.warning(f"Fehler beim Laden der Daten für {year}: {e}")
         return None
@@ -185,29 +80,21 @@ def download_year_data(year):
 @st.cache_data(ttl=3600)
 def load_data():
     """
-    Lädt alle verfügbaren Jahresdaten und kombiniert sie.
-    
-    Strategie:
-    - Historische Jahre (vor letztem Jahr): Aus lokalen Dateien laden
-    - Letztes Jahr: Prüfen ob vollständig, sonst vom OGD Portal aktualisieren
-    - Aktuelles Jahr: Immer vom OGD Portal laden und lokal speichern
+    Lädt alle verfügbaren Jahresdaten direkt vom OGD Portal und kombiniert sie.
+    Daten sind ab 2020 verfügbar.
     """
     current_year = datetime.now().year
-    previous_year = current_year - 1
     start_year = 2020  # Daten beginnen 2020
     
     dfs = []
     
     for year in range(start_year, current_year + 1):
         if year == current_year:
-            # Aktuelles Jahr: vom OGD Portal laden und lokal speichern
-            df = load_current_year_data(year)
-        elif year == previous_year:
-            # Letztes Jahr: Prüfen ob vollständig, sonst aktualisieren
-            df = check_and_update_previous_year(year)
+            # Aktuelles Jahr: kürzerer Cache (1h)
+            df = load_current_year_from_ogd(year)
         else:
-            # Historische Jahre: aus lokaler Datei laden
-            df = load_year_data_cached(year)
+            # Historische Jahre: längerer Cache (24h)
+            df = load_year_from_ogd(year)
         
         if df is not None and not df.empty:
             dfs.append(df)

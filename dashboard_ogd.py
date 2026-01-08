@@ -220,14 +220,7 @@ def analyze_data_gaps(data):
 def main():
     # Header
     st.title("Verkehrsdaten Rosengartenbrücke (OGD)")
-    st.markdown("**Stündliche Verkehrszählung nach Fahrzeugtypen** | Datenquelle: [Open Data Zürich](https://data.stadt-zuerich.ch/dataset/ugz_verkehrsdaten_stundenwerte_rosengartenbruecke)")
-    
-    # Sensorpositionen auf Karte
-    st.markdown(
-        "Sensorpositionen: "
-        "[Richtung Hardbrücke](https://map.geo.admin.ch/?lang=de&topic=ech&bgLayer=ch.swisstopo.swissimage&E=2682055&N=1249705&zoom=13) | "
-        "[Richtung Bucheggplatz](https://map.geo.admin.ch/?lang=de&topic=ech&bgLayer=ch.swisstopo.swissimage&E=2682063&N=1249701&zoom=13)"
-    )
+    st.markdown("**Stündliche Verkehrszählung nach Fahrzeugtypen** | Datenquelle: [Open Data Zürich](https://data.stadt-zuerich.ch/dataset/ugz_verkehrsdaten_stundenwerte_rosengartenbruecke) | [Sensorpositionen (Karte)](https://s.geo.admin.ch/6cr2y1s13xwp)")
     
     # --- SIDEBAR: Filter ---
     st.sidebar.header("Filter")

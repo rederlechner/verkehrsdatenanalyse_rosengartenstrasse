@@ -1,6 +1,6 @@
 """
 Verkehrsdaten Dashboard - Rosengartenbrücke Zürich (OGD Version)
-Stündliche Verkehrszählung nach Fahrzeugtypen (2020-2025)
+Stündliche Verkehrszählung nach Fahrzeugtypen (seit 2020)
 Datenquelle: Open Government Data Stadt Zürich
 """
 
@@ -119,7 +119,19 @@ def load_local_file(year):
 @st.cache_data(ttl=86400)  # 24h Cache für historische Jahre
 def load_year_data_cached(year):
     """Lädt Daten für ein historisches Jahr (mit langem Cache)."""
-    return load_local_file(year)
+    # Zuerst lokale Datei versuchen
+    df = load_local_file(year)
+    if df is not None:
+        return df
+    # Falls keine lokale Datei, vom OGD Portal laden
+    content = download_from_ogd(year)
+    if content:
+        try:
+            save_to_local(content, year)
+        except Exception:
+            pass  # Auf Streamlit Cloud kann nicht geschrieben werden
+        return pd.read_csv(BytesIO(content), encoding='utf-8-sig')
+    return None
 
 
 @st.cache_data(ttl=3600)  # 1h Cache für aktuelles Jahr
@@ -142,13 +154,15 @@ def check_and_update_previous_year(previous_year):
     """
     local_df = load_local_file(previous_year)
     
-    if not is_year_data_complete(local_df, previous_year):
-        st.info(f"Aktualisiere Daten für {previous_year} vom OGD Portal...")
+    if local_df is None or not is_year_data_complete(local_df, previous_year):
         content = download_from_ogd(previous_year)
         if content:
-            save_to_local(content, previous_year)
-            # Cache leeren für dieses Jahr
-            load_year_data_cached.clear()
+            try:
+                save_to_local(content, previous_year)
+                # Cache leeren für dieses Jahr
+                load_year_data_cached.clear()
+            except Exception:
+                pass  # Auf Streamlit Cloud kann nicht geschrieben werden
             return pd.read_csv(BytesIO(content), encoding='utf-8-sig')
     
     return local_df

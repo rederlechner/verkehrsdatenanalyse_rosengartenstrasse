@@ -1,0 +1,170 @@
+{
+  "Standorte": [
+    {
+      "ID": "Zch_Rosengartenbrücke",
+      "Name": "Zürich Rosengartenbrücke",
+      "Kurzname": "Rosengartenbrücke",
+      "Koordinaten_LV95_X": 2682039,
+      "Koordinaten_LV95_Y": 1249848,
+      "Koordinaten_WGS84_lat": 47.3943,
+      "Koordinaten_WGS84_lng": 8.5253,
+      "Adresse": "Rosengartenstrasse 18, 8037 Zürich",
+      "Höhe [M.ü.M.]": 424,
+      "Beschreibung": "Die Messstation steht an einer städtischen Hauptverkehrsachse in zentraler Lage in einem Wohn- und Geschäftsquartier in der Stadt Zürich. Sie repräsentiert eine städtische Lage mit sehr starkem Verkehr."
+    }
+  ],
+  "Fahrzeugklassen": [
+    {
+      "Klasse.ID": 0,
+      "Klasse.Text": "Unbekannt",
+      "Beschreibung": "Fahrzeug detektierbar, aber nicht klassifizierbar"
+    },
+    {
+      "Klasse.ID": 1,
+      "Klasse.Text": "Bus",
+      "Beschreibung": "Bus für den Transport einer größeren Anzahl von Personen (Reisebus, Regionalbus, > 9 Sitze)\r\nBus für den Transport einer größeren Anzahl von Personen, mit Anhänger (Reisebus, Regionalbus, > 9 Sitze)"
+    },
+    {
+      "Klasse.ID": 2,
+      "Klasse.Text": "Motorrad",
+      "Beschreibung": "Fahrrad, Moped, Motorrad oder Motorroller"
+    },
+    {
+      "Klasse.ID": 3,
+      "Klasse.Text": "Personenwagen",
+      "Beschreibung": "Pkw (bis 9 Sitze, Gesamtgewicht ≤3.5t)"
+    },
+    {
+      "Klasse.ID": 4,
+      "Klasse.Text": "Personenwagen mit Anhänger",
+      "Beschreibung": "Pkw mit Anhänger (bis 9 Sitze, Gesamtgewicht ≤3.5t)"
+    },
+    {
+      "Klasse.ID": 5,
+      "Klasse.Text": "Lieferwagen",
+      "Beschreibung": "Van mit abgeschrägter Front, Aufbau mindestens so hoch wie das Fahrerhaus (einschließlich Kleintransporter und Umzugswagen, Gewicht 2.8t bis 3.5t)\r\nPickup mit oder ohne kleiner Ladung (Fahrerhaus vorne, kein Aufbau, Gewicht ≤3.5t)\r\nWohnmobil (würfelförmig, Dach ohne Erweiterung (z. B. Schlafkoje) Gewicht ≤3.5t)"
+    },
+    {
+      "Klasse.ID": 6,
+      "Klasse.Text": "Lieferwagen mit Anhänger",
+      "Beschreibung": "Van mit Anhänger (Gewicht 2.8t bis 3.5t) \r\nPickup ohne oder mit kleiner Ladung, mit Anhänger (Fahrerhaus vorne, kein Aufbau, Gewicht ≤3.5t) \r\nWohnmobil mit Anhänger (würfelförmig, Dach ohne Erweiterung (z. B. Schlafkoje) Gewicht ≤3.5t) \r\n"
+    },
+    {
+      "Klasse.ID": 7,
+      "Klasse.Text": "Lieferwagen mit Auflieger",
+      "Beschreibung": "Van mit Sattelauflieger (Gewicht ≤3.5t)"
+    },
+    {
+      "Klasse.ID": 8,
+      "Klasse.Text": "Lastwagen",
+      "Beschreibung": "Lkw mit Aufbau (bis 12 m Länge, Gewicht >3.5t) \r\nKipper mit leerer oder fast leerer Ladefläche (Bis 12m Länge, Gewicht >3.5t) \r\nTanker für den Transport von Flüssigkeiten (ovaler Querschnitt, bis 12 m Länge, Gewicht >3.5t) \r\nTieflader ohne Aufbau oder mit niedriger Fracht (Fracht niedriger als Fahrerhaus, bis 12 m Länge, Gewicht >3.5t) \r\nSattelschlepper ohne Sattelauflieger"
+    },
+    {
+      "Klasse.ID": 9,
+      "Klasse.Text": "Lastenzug",
+      "Beschreibung": "Lkw mit Aufbau und Anhänger (Bis 18.75 m Länge, Gewicht >3.5t)\r\nKipper mit leerer oder fast leerer Ladefläche, mit Anhänger (Bis 18.75m Länge, Gewicht >3.5t)\r\nTanker für den Transport von Flüssigkeiten mit Anhänger (ovaler Querschnitt, bis 18.75m Länge, Gewicht >3.5t)\r\nLkw ohne Aufbau oder mit niedriger Fracht, mit Anhänger (Fracht niedriger als Fahrerhaus, bis 18.75 m Länge, Gewicht >3.5t)\r\nFahrzeugtransporter, beladen, mit Anhänger (2 Ladeflächen, Länge bis 21.5 m, Gewicht > 3.5t)\r\nFahrzeugtransporter, unbeladen, mit Anhänger (2 Ladeflächen, Länge bis 21.5 m, Gewicht > 3.5t)"
+    },
+    {
+      "Klasse.ID": 10,
+      "Klasse.Text": "Sattelzug",
+      "Beschreibung": "Lkw mit Sattelauflieger (beladen, bis 16.5 m Länge, Gewicht >3.5t).\r\nKipper mit Sattelauflieger mit leerer oder fast leerer Ladefläche (bis 16.5 m Länge, Gewicht >3.5t)\r\nTanker mit Sattelauflieger (ovaler Querschnitt, bis 16.5 m Länge, Gewicht >3.5t)\r\nTieflader mit Sattelauflieger (bis 16.5 m Länge, Gewicht >3.5t)"
+    },
+    {
+      "Klasse.ID": 11,
+      "Klasse.Text": "Trolleybus",
+      "Beschreibung": "Oberleitungsbus der Verkehrsbetriebe Zürich (VBZ)"
+    }
+    
+  ],
+  "Spuren": [
+    {
+      "Standort": "Rosengartenbrücke",
+      "Richtung": "Hardbrücke",
+      "Spur": 0,
+      "Beschreibung": "Busspur"
+    },
+    {
+      "Standort": "Rosengartenbrücke",
+      "Richtung": "Hardbrücke",
+      "Spur": 1,
+      "Beschreibung": "Spur 1 von links"
+    },
+    {
+      "Standort": "Rosengartenbrücke",
+      "Richtung": "Hardbrücke",
+      "Spur": 2,
+      "Beschreibung": "Spur 2 von links"
+    },
+    {
+      "Standort": "Rosengartenbrücke",
+      "Richtung": "Bucheggplatz",
+      "Spur": 0,
+      "Beschreibung": "Spur 1 von links"
+    },
+    {
+      "Standort": "Rosengartenbrücke",
+      "Richtung": "Bucheggplatz",
+      "Spur": 1,
+      "Beschreibung": "Spur 2 von links"
+    },
+    {
+      "Standort": "Rosengartenbrücke",
+      "Richtung": "Bucheggplatz",
+      "Spur": 2,
+      "Beschreibung": "Abzweigspur in die Nordstrasse"
+    },
+    {
+      "Standort": "Rosengartenbrücke",
+      "Richtung": "Bucheggplatz",
+      "Spur": 3,
+      "Beschreibung": "Busspur"
+    }
+  ],
+  "Datensatz": [
+    {
+      "Datensatz": "Verkehrszähldaten an der Rosengartenstrasse nach Fahrzeugtypen, seit 2020",
+      "URL": "https://data.stadt-zuerich.ch/dataset/ugz_verkehrsdaten_stundenwerte_rosengartenbruecke"
+    }
+  ],
+  "Zeitinformation": {
+    "Spaltenname": "Datum",
+    "Beschreibung": "Zeitstempel des Messintervalls. Repräsentiert den Start des jeweiligen Mittelungsintervalls.",
+    "Zeitzone": "Etc/GMT-1 (entspricht MEZ, UTC+1, Sommerzeit nicht angewendet)",
+    "Sommerzeit": "nicht angewendet",
+    "Referenz": "Alle Werte repräsentieren lokale Winterzeit in Zürich (Mitteleuropäische Zeit, UTC+1).",
+    "Format_CSV": "ISO 8601, z. B. 2025-03-15T14:00:00+01:00",
+    "Datentyp_Parquet": "datetime64[ns, Etc/GMT-1]",
+    "Beispiel": {
+      "Datum": "2025-01-01T12:00:00+01:00"
+    }
+  },
+  "Datenstruktur": {
+    "Beschreibung": "Struktur und Datentypen der bereitgestellten Dateien (CSV und Parquet).",
+    "Formate": {
+      "CSV": {
+        "Dateiformat": "CSV (UTF-8, Komma-getrennt)",
+        "Spalten": {
+          "Datum": "ISO8601-Zeitstempel, MEZ (UTC+1), keine Sommerzeit",
+          "Standort": "Messstation (gemäss 'Standorte')",
+          "Parameter": "Messparameter (gemäss 'Parameter')",
+          "Intervall": "Mittelungsintervall (z. B. h1, d1)",
+          "Einheit": "Einheit des Messwerts",
+          "Wert": "Messwert (float)",
+          "Status": "Qualitäts- oder Gültigkeitsstatus des Messwerts"
+        }
+      },
+      "Parquet": {
+        "Dateiformat": "Apache Parquet (Kompression: snappy)",
+        "Spalten": {
+          "Datum": "datetime64[ns, Etc/GMT-1]",
+          "Standort": "Messstation (gemäss 'Standorte')",
+          "Parameter": "Messparameter (gemäss 'Parameter')",
+          "Intervall": "Mittelungsintervall (z. B. h1, d1)",
+          "Einheit": "Einheit des Messwerts",
+          "Wert": "Messwert (float64)",
+          "Status": "Qualitäts- oder Gültigkeitsstatus des Messwerts"
+        }
+      }
+    }
+  }
+}

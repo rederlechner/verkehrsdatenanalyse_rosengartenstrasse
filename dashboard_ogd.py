@@ -21,7 +21,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Seiten-Konfiguration
 st.set_page_config(
     page_title="Verkehr Rosengartenbrücke (OGD)",
-    page_icon="🚗",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -220,11 +219,18 @@ def analyze_data_gaps(data):
 
 def main():
     # Header
-    st.title("🚗 Verkehrsdaten Rosengartenbrücke (OGD)")
+    st.title("Verkehrsdaten Rosengartenbrücke (OGD)")
     st.markdown("**Stündliche Verkehrszählung nach Fahrzeugtypen** | Datenquelle: [Open Data Zürich](https://data.stadt-zuerich.ch/dataset/ugz_verkehrsdaten_stundenwerte_rosengartenbruecke)")
     
+    # Sensorpositionen auf Karte
+    st.markdown(
+        "Sensorpositionen: "
+        "[Richtung Hardbrücke](https://map.geo.admin.ch/?lang=de&topic=ech&bgLayer=ch.swisstopo.swissimage&E=2682055&N=1249705&zoom=13) | "
+        "[Richtung Bucheggplatz](https://map.geo.admin.ch/?lang=de&topic=ech&bgLayer=ch.swisstopo.swissimage&E=2682063&N=1249701&zoom=13)"
+    )
+    
     # --- SIDEBAR: Filter ---
-    st.sidebar.header("🔍 Filter")
+    st.sidebar.header("Filter")
     
     # Verfügbare Jahre (2020 bis aktuelles Jahr)
     current_year = datetime.now().year
@@ -302,17 +308,17 @@ def main():
     days_count = filtered['Datum_Tag'].nunique()
     
     with col1:
-        st.metric(label="🚗 Fahrzeuge gesamt", value=format_number(total_vehicles))
+        st.metric(label="Fahrzeuge gesamt", value=format_number(total_vehicles))
     with col2:
-        st.metric(label="📊 Ø Tagesverkehr (DTV)", value=format_number(avg_daily))
+        st.metric(label="Ø Tagesverkehr (DTV)", value=format_number(avg_daily))
     with col3:
-        st.metric(label="⏰ Spitzenstunde", value=f"{peak_hour}:00 - {peak_hour+1}:00")
+        st.metric(label="Spitzenstunde", value=f"{peak_hour}:00 - {peak_hour+1}:00")
     with col4:
-        st.metric(label="📅 Tage im Datensatz", value=f"{days_count:,}".replace(',', "'"))
+        st.metric(label="Tage im Datensatz", value=f"{days_count:,}".replace(',', "'"))
     
     # === LETZTE 7 TAGE: Verlauf Personenwagen, Lastwagen, Lieferwagen ===
     st.markdown("---")
-    st.subheader("📊 Letzte 7 Tage: Personenwagen, Lastwagen & Lieferwagen (Stundenwerte)")
+    st.subheader("Letzte 7 Tage: Personenwagen, Lastwagen & Lieferwagen (Stundenwerte)")
     
     # Daten für die letzten 7 Tage (aus Gesamtdaten, unabhängig von Filterung)
     max_datum = data['Datum'].max()
@@ -402,7 +408,7 @@ def main():
     st.markdown("---")
     
     # Zeile 1a: Tagesverlauf und Wochenverlauf nach Richtung
-    st.subheader("📈 Tages- und Wochenverlauf nach Richtung")
+    st.subheader("Tages- und Wochenverlauf nach Richtung")
     col_left, col_right = st.columns(2)
     
     with col_left:
@@ -437,7 +443,7 @@ def main():
     
     # Zeile 1b: Tagesverlauf und Wochenverlauf nach Jahr
     if len(selected_jahre) > 1:
-        st.subheader("📈 Tages- und Wochenverlauf nach Jahr")
+        st.subheader("Tages- und Wochenverlauf nach Jahr")
         col_left_yr, col_right_yr = st.columns(2)
         
         with col_left_yr:
@@ -470,7 +476,7 @@ def main():
     
     # === TAGESVERLAUF PRO WOCHENTAG ===
     st.markdown("---")
-    st.subheader("📅 Tagesverlauf pro Wochentag (Gesamtzeitraum)")
+    st.subheader("Tagesverlauf pro Wochentag (Gesamtzeitraum)")
     st.caption("Durchschnittlicher Stundenverlauf für jeden Wochentag über alle ausgewählten Jahre")
     
     wochentag_namen_full = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']
@@ -548,8 +554,8 @@ def main():
     col_left2, col_right2 = st.columns(2)
     
     with col_left2:
-        st.subheader("🚙 Fahrzeugklassen (%)")
-        tab_detail, tab_kategorie = st.tabs(["📊 Detailliert", "📊 Kategorien"])
+        st.subheader("Fahrzeugklassen (%)")
+        tab_detail, tab_kategorie = st.tabs(["Detailliert", "Kategorien"])
         
         with tab_detail:
             by_class = filtered.groupby('Klasse.Text')['Anzahl'].sum().reset_index()
@@ -608,7 +614,7 @@ def main():
     # Zeile 2b: Fahrzeugkategorien im Zeitverlauf
     if len(selected_jahre) > 1:
         st.markdown("---")
-        st.subheader("🚙 Fahrzeugkategorien im Jahresverlauf (%)")
+        st.subheader("Fahrzeugkategorien im Jahresverlauf (%)")
         
         kategorie_farben_verlauf = {
             'Personenwagen': '#3498db', 'Lieferwagen': '#2ecc71', 'Motorrad': '#e74c3c',
@@ -658,7 +664,7 @@ def main():
                                     hovermode='x unified',
                                     legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0))
         
-        tab_line, tab_area = st.tabs(["📈 Liniendiagramm", "📊 Flächendiagramm"])
+        tab_line, tab_area = st.tabs(["Liniendiagramm", "Flächendiagramm"])
         with tab_line:
             st.plotly_chart(fig_cat_trend, use_container_width=True, key="cat_line")
         with tab_area:
@@ -666,7 +672,7 @@ def main():
     
     # Zeile 3: Monatstrend
     st.markdown("---")
-    st.subheader("📅 Monatlicher Verkehrstrend (Ø Tagesverkehr)")
+    st.subheader("Monatlicher Verkehrstrend (Ø Tagesverkehr)")
     
     import calendar
     daily_totals_monthly = filtered.groupby(['Jahr', 'Monat', 'Datum_Tag', 'Richtung'])['Anzahl'].sum().reset_index()
@@ -694,7 +700,7 @@ def main():
     if 2020 in jahre_im_datensatz:
         shapes.append(dict(type="rect", xref="x", yref="paper", x0="2020-03-01", x1="2020-06-01",
                            y0=0, y1=1, fillcolor="rgba(255, 0, 0, 0.1)", line=dict(width=0), layer="below"))
-        annotations.append(dict(x="2020-04-15", y=1.02, xref="x", yref="paper", text="🔒 Lockdown",
+        annotations.append(dict(x="2020-04-15", y=1.02, xref="x", yref="paper", text="Lockdown",
                                 showarrow=False, font=dict(size=10, color="#e74c3c"), bgcolor="rgba(255,255,255,0.8)"))
     
     for jahr in jahre_im_datensatz:
@@ -703,7 +709,7 @@ def main():
     
     if len(jahre_im_datensatz) > 0:
         first_year = min(jahre_im_datensatz)
-        annotations.append(dict(x=f"{first_year}-08-01", y=1.02, xref="x", yref="paper", text="☀️ Sommerferien",
+        annotations.append(dict(x=f"{first_year}-08-01", y=1.02, xref="x", yref="paper", text="Sommerferien",
                                 showarrow=False, font=dict(size=10, color="#f39c12"), bgcolor="rgba(255,255,255,0.8)"))
     
     for jahr in sorted(jahre_im_datensatz)[1:]:
@@ -712,11 +718,11 @@ def main():
     
     fig_trend.update_layout(hovermode='x unified', bargap=0.1, shapes=shapes, annotations=annotations, margin=dict(t=40))
     st.plotly_chart(fig_trend, use_container_width=True)
-    st.caption("🔒 Rot = COVID-19 Lockdown (März-Mai 2020) | ☀️ Gelb = Sommerferien Zürich (Juli/August)")
+    st.caption("Rot = COVID-19 Lockdown (März-Mai 2020) | Gelb = Sommerferien Zürich (Juli/August)")
     
     # Zeile 3b: Jahresverlauf (Wochenschnitt)
     st.markdown("---")
-    st.subheader("📈 Jahresverlauf (Wochendurchschnitt)")
+    st.subheader("Jahresverlauf (Wochendurchschnitt)")
     
     daily_totals_weekly = filtered.groupby(['Jahr', 'Kalenderwoche', 'Datum_Tag'])['Anzahl'].sum().reset_index()
     
@@ -751,12 +757,12 @@ def main():
     if '2020' in weekly_avg['Jahr'].values:
         weekly_shapes.append(dict(type="rect", xref="x", yref="paper", x0=11, x1=20,
                                   y0=0, y1=1, fillcolor="rgba(255, 0, 0, 0.1)", line=dict(width=0), layer="below"))
-        weekly_annotations.append(dict(x=15, y=1.02, xref="x", yref="paper", text="🔒 Lockdown",
+        weekly_annotations.append(dict(x=15, y=1.02, xref="x", yref="paper", text="Lockdown",
                                        showarrow=False, font=dict(size=10, color="#e74c3c"), bgcolor="rgba(255,255,255,0.8)"))
     
     weekly_shapes.append(dict(type="rect", xref="x", yref="paper", x0=28, x1=33,
                               y0=0, y1=1, fillcolor="rgba(255, 193, 7, 0.1)", line=dict(width=0), layer="below"))
-    weekly_annotations.append(dict(x=30.5, y=1.02, xref="x", yref="paper", text="☀️ Ferien",
+    weekly_annotations.append(dict(x=30.5, y=1.02, xref="x", yref="paper", text="Ferien",
                                    showarrow=False, font=dict(size=10, color="#f39c12"), bgcolor="rgba(255,255,255,0.8)"))
     
     weekly_shapes.extend([
@@ -765,13 +771,13 @@ def main():
         dict(type="rect", xref="x", yref="paper", x0=0.5, x1=2, y0=0, y1=1,
              fillcolor="rgba(76, 175, 80, 0.1)", line=dict(width=0), layer="below")
     ])
-    weekly_annotations.append(dict(x=52, y=1.02, xref="x", yref="paper", text="🎄",
+    weekly_annotations.append(dict(x=52, y=1.02, xref="x", yref="paper", text="",
                                    showarrow=False, font=dict(size=10), bgcolor="rgba(255,255,255,0.8)"))
     
     fig_weekly.update_layout(xaxis=dict(tickmode='linear', tick0=1, dtick=4, range=[0.5, 52.5]),
                               hovermode='x unified', shapes=weekly_shapes, annotations=weekly_annotations, margin=dict(t=40))
     st.plotly_chart(fig_weekly, use_container_width=True)
-    st.caption("🔒 Rot = COVID-19 Lockdown (KW 12-20, 2020) | ☀️ Gelb = Sommerferien (KW 28-33) | 🎄 Grün = Weihnachten/Neujahr")
+    st.caption("Rot = COVID-19 Lockdown (KW 12-20, 2020) | Gelb = Sommerferien (KW 28-33) |  Grün = Weihnachten/Neujahr")
     
     # Zeile 4: Heatmap
     st.markdown("---")
@@ -805,7 +811,7 @@ def main():
     # Zeile 5: Jahresvergleich
     if len(selected_jahre) > 1:
         st.markdown("---")
-        st.subheader("📊 Jahresvergleich (Ø Tagesverkehr)")
+        st.subheader("Jahresvergleich (Ø Tagesverkehr)")
         
         gap_analysis = analyze_data_gaps(data)
         
@@ -834,11 +840,11 @@ def main():
                     gap_days = corr_data['Tage_Lücken']
                     vollst = corr_data['Vollständigkeit']
                     if gap_days > 1:
-                        st.metric(label=f"📅 {jahr}", value=formatted_val,
+                        st.metric(label=f"{jahr}", value=formatted_val,
                                   help=f"Ø Fahrzeuge/Tag | Vollständigkeit: {vollst:.1f}% | {gap_days:.0f} Tage fehlen")
                         st.caption(f"⚠️ {gap_days:.0f} Tage fehlen")
                     else:
-                        st.metric(label=f"📅 {jahr}", value=formatted_val,
+                        st.metric(label=f"{jahr}", value=formatted_val,
                                   help=f"Ø Fahrzeuge/Tag | Vollständigkeit: {vollst:.1f}%")
         
         years_with_gaps = [c for c in yearly_corrected if c['Tage_Lücken'] > 7]
@@ -850,7 +856,7 @@ def main():
         yearly = daily_by_year.groupby(['Jahr', 'Richtung'])['Anzahl'].mean().reset_index()
         yearly['Anzahl_fmt'] = yearly['Anzahl'].apply(lambda x: format_number_ch(x))
         
-        tab_dtv, tab_total = st.tabs(["📊 Ø Tagesverkehr (DTV)", "📊 Gesamtanzahl"])
+        tab_dtv, tab_total = st.tabs(["Ø Tagesverkehr (DTV)", "Gesamtanzahl"])
         
         with tab_dtv:
             fig_yearly = px.bar(
@@ -877,11 +883,11 @@ def main():
                         tage_daten = corr_data['Tage_Daten']
                         if gap_days > 1:
                             schaetzung = total_val[0] * (365 / tage_daten) if tage_daten > 0 else total_val[0]
-                            st.metric(label=f"📅 {jahr}", value=formatted_total,
+                            st.metric(label=f"{jahr}", value=formatted_total,
                                       help=f"Gemessene Fahrzeuge | {tage_daten} Tage mit Daten")
-                            st.caption(f"📈 Hochrechnung: ~{format_number(schaetzung)}")
+                            st.caption(f"Hochrechnung: ~{format_number(schaetzung)}")
                         else:
-                            st.metric(label=f"📅 {jahr}", value=formatted_total,
+                            st.metric(label=f"{jahr}", value=formatted_total,
                                       help=f"Gemessene Fahrzeuge | {tage_daten} Tage mit Daten")
             
             fig_yearly_sum = px.bar(
@@ -909,7 +915,7 @@ def main():
     with col_gap3:
         st.metric("Fehlende Tage", f"{total_gap_hours/24:.1f}")
     
-    tab_gaps, tab_yearly = st.tabs(["📋 Datenlücken", "📊 Vollständigkeit pro Jahr"])
+    tab_gaps, tab_yearly = st.tabs(["Datenlücken", "Vollständigkeit pro Jahr"])
     
     with tab_gaps:
         if significant_gaps:

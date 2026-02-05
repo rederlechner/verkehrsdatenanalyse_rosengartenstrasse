@@ -676,42 +676,73 @@ def main():
         lambda row: calendar.monthrange(int(row['Jahr']), int(row['Monat']))[1], axis=1
     )
     monthly_stats['Abdeckung'] = monthly_stats['Tage'] / monthly_stats['Erwartete_Tage']
-    monthly = monthly_stats[monthly_stats['Abdeckung'] >= 0.9].copy()
-    monthly['Datum'] = pd.to_datetime(monthly['Jahr'].astype(str) + '-' + monthly['Monat'].astype(str) + '-15')
-    monthly['Anzahl_fmt'] = monthly['Anzahl'].apply(lambda x: format_number_ch(x))
     
-    fig_trend = px.bar(
-        monthly, x='Datum', y='Anzahl', color='Richtung', barmode='group',
-        labels={'Datum': '', 'Anzahl': 'Ø Fahrzeuge/Tag', 'Richtung': 'Richtung'},
-        color_discrete_sequence=['#3498db', '#e74c3c'], custom_data=['Anzahl_fmt']
-    )
-    fig_trend.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
+    # Filter: Monate mit mindestens 50% Abdeckung anzeigen (weniger strikt für aktuelles Jahr)
+    # Für abgeschlossene Monate: mindestens 70% Abdeckung
+    # Für den laufenden Monat: mindestens 3 Tage Daten
+    current_year = datetime.now().year
+    current_month = datetime.now().month
+    is_current_month = (monthly_stats['Jahr'] == current_year) & (monthly_stats['Monat'] == current_month)
+    monthly = monthly_stats[
+        (monthly_stats['Abdeckung'] >= 0.7) | 
+        (is_current_month & (monthly_stats['Tage'] >= 3))
+    ].copy()
     
-    shapes, annotations = [], []
-    jahre_im_datensatz = monthly['Jahr'].unique()
-    
-    if 2020 in jahre_im_datensatz:
-        shapes.append(dict(type="rect", xref="x", yref="paper", x0="2020-03-01", x1="2020-06-01",
-                           y0=0, y1=1, fillcolor="rgba(255, 0, 0, 0.1)", line=dict(width=0), layer="below"))
-        annotations.append(dict(x="2020-04-15", y=1.02, xref="x", yref="paper", text="Lockdown",
-                                showarrow=False, font=dict(size=10, color="#e74c3c"), bgcolor="rgba(255,255,255,0.8)"))
-    
-    for jahr in jahre_im_datensatz:
-        shapes.append(dict(type="rect", xref="x", yref="paper", x0=f"{jahr}-07-01", x1=f"{jahr}-09-01",
-                           y0=0, y1=1, fillcolor="rgba(255, 193, 7, 0.1)", line=dict(width=0), layer="below"))
-    
-    if len(jahre_im_datensatz) > 0:
-        first_year = min(jahre_im_datensatz)
-        annotations.append(dict(x=f"{first_year}-08-01", y=1.02, xref="x", yref="paper", text="Sommerferien",
-                                showarrow=False, font=dict(size=10, color="#f39c12"), bgcolor="rgba(255,255,255,0.8)"))
-    
-    for jahr in sorted(jahre_im_datensatz)[1:]:
-        shapes.append(dict(type="line", xref="x", yref="paper", x0=f"{jahr}-01-01", x1=f"{jahr}-01-01",
-                           y0=0, y1=1, line=dict(color="rgba(0,0,0,0.3)", width=1, dash="dash")))
-    
-    fig_trend.update_layout(hovermode='x unified', bargap=0.1, shapes=shapes, annotations=annotations, margin=dict(t=40))
-    st.plotly_chart(fig_trend, use_container_width=True)
-    st.caption("Rot = COVID-19 Lockdown (März-Mai 2020) | Gelb = Sommerferien Zürich (Juli/August)")
+    if monthly.empty:
+        st.info("ℹ️ Keine Monate mit ausreichender Datenabdeckung verfügbar.")
+    else:
+        monthly['Datum'] = pd.to_datetime(monthly['Jahr'].astype(str) + '-' + monthly['Monat'].astype(str) + '-15')
+        monthly['Anzahl_fmt'] = monthly['Anzahl'].apply(lambda x: format_number_ch(x))
+        
+        fig_trend = px.bar(
+            monthly, x='Datum', y='Anzahl', color='Richtung', barmode='group',
+            labels={'Datum': '', 'Anzahl': 'Ø Fahrzeuge/Tag', 'Richtung': 'Richtung'},
+            color_discrete_sequence=['#3498db', '#e74c3c'], custom_data=['Anzahl_fmt']
+        )
+        fig_trend.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
+        
+        shapes, annotations = [], []
+        jahre_im_datensatz = monthly['Jahr'].unique()
+        
+        # X-Achse: Von Januar bis Dezember für alle ausgewählten Jahre
+        min_jahr = min(selected_jahre)
+        max_jahr = max(selected_jahre)
+        x_range_start = f"{min_jahr}-01-01"
+        x_range_end = f"{max_jahr}-12-31"
+        
+        if 2020 in jahre_im_datensatz:
+            shapes.append(dict(type="rect", xref="x", yref="paper", x0="2020-03-01", x1="2020-06-01",
+                               y0=0, y1=1, fillcolor="rgba(255, 0, 0, 0.1)", line=dict(width=0), layer="below"))
+            annotations.append(dict(x="2020-04-15", y=1.02, xref="x", yref="paper", text="Lockdown",
+                                    showarrow=False, font=dict(size=10, color="#e74c3c"), bgcolor="rgba(255,255,255,0.8)"))
+        
+        for jahr in jahre_im_datensatz:
+            shapes.append(dict(type="rect", xref="x", yref="paper", x0=f"{jahr}-07-01", x1=f"{jahr}-09-01",
+                               y0=0, y1=1, fillcolor="rgba(255, 193, 7, 0.1)", line=dict(width=0), layer="below"))
+        
+        if len(jahre_im_datensatz) > 0:
+            first_year = min(jahre_im_datensatz)
+            annotations.append(dict(x=f"{first_year}-08-01", y=1.02, xref="x", yref="paper", text="Sommerferien",
+                                    showarrow=False, font=dict(size=10, color="#f39c12"), bgcolor="rgba(255,255,255,0.8)"))
+        
+        for jahr in sorted(jahre_im_datensatz)[1:]:
+            shapes.append(dict(type="line", xref="x", yref="paper", x0=f"{jahr}-01-01", x1=f"{jahr}-01-01",
+                               y0=0, y1=1, line=dict(color="rgba(0,0,0,0.3)", width=1, dash="dash")))
+        
+        fig_trend.update_layout(
+            hovermode='x unified', 
+            bargap=0.1, 
+            shapes=shapes, 
+            annotations=annotations, 
+            margin=dict(t=40),
+            xaxis=dict(
+                range=[x_range_start, x_range_end],
+                dtick="M1",
+                tickformat="%b %Y"
+            )
+        )
+        st.plotly_chart(fig_trend, use_container_width=True)
+        st.caption("Rot = COVID-19 Lockdown (März-Mai 2020) | Gelb = Sommerferien Zürich (Juli/August)")
     
     # Zeile 3b: Jahresverlauf (Wochenschnitt)
     st.markdown("---")
@@ -801,96 +832,261 @@ def main():
     fig_heatmap.update_layout(height=350)
     st.plotly_chart(fig_heatmap, use_container_width=True)
     
-    # Zeile 5: Jahresvergleich
-    if len(selected_jahre) > 1:
-        st.markdown("---")
-        st.subheader("Jahresvergleich (Ø Tagesverkehr)")
+    # Zeile 5: Jahresvergleich (auch bei einem Jahr)
+    st.markdown("---")
+    st.subheader("Jahresvergleich (Ø Tagesverkehr)")
+    
+    gap_analysis = analyze_data_gaps(data)
+    
+    daily_by_year_total = filtered.groupby(['Jahr', 'Datum_Tag'])['Anzahl'].sum().reset_index()
+    yearly_total = daily_by_year_total.groupby('Jahr')['Anzahl'].mean().reset_index()
+    
+    yearly_corrected = []
+    for _, row in yearly_total.iterrows():
+        jahr = row['Jahr']
+        avg_dtv = row['Anzahl']
+        days_with_data = daily_by_year_total[daily_by_year_total['Jahr'] == jahr]['Datum_Tag'].nunique()
+        year_stat = next((s for s in gap_analysis['yearly_stats'] if s['jahr'] == jahr), None)
+        gap_days = year_stat['gap_days'] if year_stat else 0
+        vollst = year_stat['completeness'] if year_stat else 100
+        yearly_corrected.append({
+            'Jahr': jahr, 'DTV': avg_dtv, 'Tage_Daten': days_with_data,
+            'Tage_Lücken': gap_days, 'Vollständigkeit': vollst
+        })
+    
+    cols_yearly = st.columns(len(selected_jahre))
+    for i, jahr in enumerate(sorted(selected_jahre)):
+        with cols_yearly[i]:
+            corr_data = next((c for c in yearly_corrected if c['Jahr'] == jahr), None)
+            if corr_data:
+                formatted_val = format_number(corr_data['DTV'])
+                gap_days = corr_data['Tage_Lücken']
+                vollst = corr_data['Vollständigkeit']
+                if gap_days > 1:
+                    st.metric(label=f"{jahr}", value=formatted_val,
+                              help=f"Ø Fahrzeuge/Tag | Vollständigkeit: {vollst:.1f}% | {gap_days:.0f} Tage fehlen")
+                    st.caption(f"⚠️ {gap_days:.0f} Tage fehlen")
+                else:
+                    st.metric(label=f"{jahr}", value=formatted_val,
+                              help=f"Ø Fahrzeuge/Tag | Vollständigkeit: {vollst:.1f}%")
+    
+    years_with_gaps = [c for c in yearly_corrected if c['Tage_Lücken'] > 7]
+    if years_with_gaps:
+        st.info("ℹ️ **Hinweis:** Einige Jahre haben grössere Datenlücken. "
+                "Der Ø Tagesverkehr (DTV) basiert nur auf den verfügbaren Tagen.")
+    
+    # Für Min/Max: Nur Tage mit mindestens 90% Datenverfügbarkeit PRO RICHTUNG verwenden
+    # Wichtig: Stundenzählung auf Basis der UNGEFILTERTEN Daten (data statt filtered), 
+    # damit bei Filterung auf Fahrzeugklassen trotzdem die Datenverfügbarkeit korrekt ermittelt wird
+    # Die Verfügbarkeit muss PRO RICHTUNG geprüft werden, da eine Richtung ausfallen kann
+    hours_per_day_direction = data.groupby(['Jahr', 'Datum_Tag', 'Richtung'])['Stunde'].nunique().reset_index(name='Stunden')
+    # Mindestens 22 Stunden (90% Verfügbarkeit von 24h) pro Richtung
+    complete_days_list = hours_per_day_direction[hours_per_day_direction['Stunden'] >= 22][['Jahr', 'Datum_Tag', 'Richtung']]
+    
+    # Tagessummen nur für vollständige Tage berechnen (verhindert Min=0 bei unvollständigen Tagen)
+    filtered_complete = filtered.merge(complete_days_list, on=['Jahr', 'Datum_Tag', 'Richtung'])
+    daily_by_year = filtered_complete.groupby(['Jahr', 'Datum_Tag', 'Richtung'])['Anzahl'].sum().reset_index()
+    
+    # Zusätzlicher Filter: Tage mit Anzahl=0 ausschliessen (können bei bestimmten Filterkonstellationen auftreten)
+    daily_by_year = daily_by_year[daily_by_year['Anzahl'] > 0]
+    
+    # Statistiken berechnen: Mean, Min, Max nur über vollständige Tage (inkl. Datum für Min/Max)
+    if not daily_by_year.empty:
+        # Aggregation für Mean, Min, Max
+        yearly_stats = daily_by_year.groupby(['Jahr', 'Richtung'])['Anzahl'].agg(['mean', 'min', 'max']).reset_index()
+        yearly_stats.columns = ['Jahr', 'Richtung', 'Anzahl', 'Min', 'Max']
         
-        gap_analysis = analyze_data_gaps(data)
+        # Datum für Min und Max ermitteln
+        idx_min = daily_by_year.groupby(['Jahr', 'Richtung'])['Anzahl'].idxmin()
+        idx_max = daily_by_year.groupby(['Jahr', 'Richtung'])['Anzahl'].idxmax()
         
-        daily_by_year_total = filtered.groupby(['Jahr', 'Datum_Tag'])['Anzahl'].sum().reset_index()
-        yearly_total = daily_by_year_total.groupby('Jahr')['Anzahl'].mean().reset_index()
+        min_dates = daily_by_year.loc[idx_min, ['Jahr', 'Richtung', 'Datum_Tag']].rename(columns={'Datum_Tag': 'Min_Datum'})
+        max_dates = daily_by_year.loc[idx_max, ['Jahr', 'Richtung', 'Datum_Tag']].rename(columns={'Datum_Tag': 'Max_Datum'})
         
-        yearly_corrected = []
-        for _, row in yearly_total.iterrows():
-            jahr = row['Jahr']
-            avg_dtv = row['Anzahl']
-            days_with_data = daily_by_year_total[daily_by_year_total['Jahr'] == jahr]['Datum_Tag'].nunique()
-            year_stat = next((s for s in gap_analysis['yearly_stats'] if s['jahr'] == jahr), None)
-            gap_days = year_stat['gap_days'] if year_stat else 0
-            vollst = year_stat['completeness'] if year_stat else 100
-            yearly_corrected.append({
-                'Jahr': jahr, 'DTV': avg_dtv, 'Tage_Daten': days_with_data,
-                'Tage_Lücken': gap_days, 'Vollständigkeit': vollst
-            })
+        yearly = yearly_stats.merge(min_dates, on=['Jahr', 'Richtung']).merge(max_dates, on=['Jahr', 'Richtung'])
+        yearly['Min_Datum_fmt'] = yearly['Min_Datum'].apply(lambda x: x.strftime('%d.%m.%Y') if pd.notna(x) else '')
+        yearly['Max_Datum_fmt'] = yearly['Max_Datum'].apply(lambda x: x.strftime('%d.%m.%Y') if pd.notna(x) else '')
+    else:
+        # Fallback: wenn keine vollständigen Tage, berechne Mean über alle Tage
+        daily_by_year_all = filtered.groupby(['Jahr', 'Datum_Tag', 'Richtung'])['Anzahl'].sum().reset_index()
+        yearly = daily_by_year_all.groupby(['Jahr', 'Richtung'])['Anzahl'].mean().reset_index()
+        yearly.columns = ['Jahr', 'Richtung', 'Anzahl']
+        yearly['Min'] = yearly['Anzahl']
+        yearly['Max'] = yearly['Anzahl']
+        yearly['Min_Datum_fmt'] = ''
+        yearly['Max_Datum_fmt'] = ''
+    
+    yearly['Anzahl_fmt'] = yearly['Anzahl'].apply(lambda x: format_number_ch(x))
+    yearly['Min_fmt'] = yearly['Min'].apply(lambda x: format_number_ch(x))
+    yearly['Max_fmt'] = yearly['Max'].apply(lambda x: format_number_ch(x))
+    
+    # Gesamtverkehr (beide Richtungen) für zusätzliche Grafik
+    # Nur Tage verwenden, an denen BEIDE Richtungen vollständige Daten haben
+    complete_days_both = complete_days_list.groupby(['Jahr', 'Datum_Tag']).size().reset_index(name='Richtungen')
+    complete_days_both = complete_days_both[complete_days_both['Richtungen'] >= 2][['Jahr', 'Datum_Tag']]
+    
+    filtered_complete_gesamt = filtered.merge(complete_days_both, on=['Jahr', 'Datum_Tag'])
+    daily_by_year_gesamt = filtered_complete_gesamt.groupby(['Jahr', 'Datum_Tag'])['Anzahl'].sum().reset_index()
+    daily_by_year_gesamt = daily_by_year_gesamt[daily_by_year_gesamt['Anzahl'] > 0]
+    
+    if not daily_by_year_gesamt.empty:
+        yearly_gesamt_stats = daily_by_year_gesamt.groupby('Jahr')['Anzahl'].agg(['mean', 'min', 'max']).reset_index()
+        yearly_gesamt_stats.columns = ['Jahr', 'Anzahl', 'Min', 'Max']
         
-        cols_yearly = st.columns(len(selected_jahre))
+        # Datum für Min und Max ermitteln
+        idx_min_gesamt = daily_by_year_gesamt.groupby('Jahr')['Anzahl'].idxmin()
+        idx_max_gesamt = daily_by_year_gesamt.groupby('Jahr')['Anzahl'].idxmax()
+        
+        min_dates_gesamt = daily_by_year_gesamt.loc[idx_min_gesamt, ['Jahr', 'Datum_Tag']].rename(columns={'Datum_Tag': 'Min_Datum'})
+        max_dates_gesamt = daily_by_year_gesamt.loc[idx_max_gesamt, ['Jahr', 'Datum_Tag']].rename(columns={'Datum_Tag': 'Max_Datum'})
+        
+        yearly_gesamt = yearly_gesamt_stats.merge(min_dates_gesamt, on='Jahr').merge(max_dates_gesamt, on='Jahr')
+        yearly_gesamt['Min_Datum_fmt'] = yearly_gesamt['Min_Datum'].apply(lambda x: x.strftime('%d.%m.%Y') if pd.notna(x) else '')
+        yearly_gesamt['Max_Datum_fmt'] = yearly_gesamt['Max_Datum'].apply(lambda x: x.strftime('%d.%m.%Y') if pd.notna(x) else '')
+    else:
+        # Fallback
+        daily_by_year_gesamt_all = filtered.groupby(['Jahr', 'Datum_Tag'])['Anzahl'].sum().reset_index()
+        yearly_gesamt = daily_by_year_gesamt_all.groupby('Jahr')['Anzahl'].mean().reset_index()
+        yearly_gesamt.columns = ['Jahr', 'Anzahl']
+        yearly_gesamt['Min'] = yearly_gesamt['Anzahl']
+        yearly_gesamt['Max'] = yearly_gesamt['Anzahl']
+        yearly_gesamt['Min_Datum_fmt'] = ''
+        yearly_gesamt['Max_Datum_fmt'] = ''
+    
+    yearly_gesamt['Anzahl_fmt'] = yearly_gesamt['Anzahl'].apply(lambda x: format_number_ch(x))
+    yearly_gesamt['Min_fmt'] = yearly_gesamt['Min'].apply(lambda x: format_number_ch(x))
+    yearly_gesamt['Max_fmt'] = yearly_gesamt['Max'].apply(lambda x: format_number_ch(x))
+    
+    tab_gesamt, tab_dtv, tab_total = st.tabs(["Gesamtverkehr", "Nach Richtung", "Gesamtanzahl"])
+    
+    with tab_gesamt:
+        # Grafik für Gesamtverkehr (beide Richtungen zusammen)
+        fig_yearly_gesamt = go.Figure()
+        
+        error_minus_gesamt = yearly_gesamt['Anzahl'] - yearly_gesamt['Min']
+        error_plus_gesamt = yearly_gesamt['Max'] - yearly_gesamt['Anzahl']
+        
+        fig_yearly_gesamt.add_trace(go.Bar(
+            x=yearly_gesamt['Jahr'],
+            y=yearly_gesamt['Anzahl'],
+            name='Gesamtverkehr',
+            marker_color='#85c1e9',  # Helleres Blau
+            text=yearly_gesamt['Anzahl_fmt'],
+            textposition='outside',
+            error_y=dict(
+                type='data',
+                symmetric=False,
+                array=error_plus_gesamt,
+                arrayminus=error_minus_gesamt,
+                color='#555',
+                thickness=1.5,
+                width=4
+            ),
+            customdata=np.column_stack([
+                yearly_gesamt['Anzahl_fmt'], 
+                yearly_gesamt['Min_fmt'], 
+                yearly_gesamt['Max_fmt'],
+                yearly_gesamt['Min_Datum_fmt'],
+                yearly_gesamt['Max_Datum_fmt']
+            ]),
+            hovertemplate='Ø: %{customdata[0]}<br>Min: %{customdata[1]} (%{customdata[3]})<br>Max: %{customdata[2]} (%{customdata[4]})<extra></extra>'
+        ))
+        
+        fig_yearly_gesamt.update_layout(
+            xaxis_title='',
+            yaxis_title='Ø Fahrzeuge/Tag (Gesamtverkehr)',
+            showlegend=False,
+            xaxis=dict(
+                tickmode='array',
+                tickvals=yearly_gesamt['Jahr'].tolist(),
+                ticktext=[str(j) for j in yearly_gesamt['Jahr'].tolist()]
+            )
+        )
+        st.plotly_chart(fig_yearly_gesamt, use_container_width=True)
+        st.caption("📊 Gesamtverkehr (beide Richtungen). Die Fehlerbalken zeigen das minimale und maximale Tagesmittel pro Jahr.")
+    
+    with tab_dtv:
+        # Farben für Richtungen (Bucheggplatz=blau, Hardbrücke=rot)
+        richtung_farben = {'Bucheggplatz': '#3498db', 'Hardbrücke': '#e74c3c'}
+        richtungen_liste = yearly['Richtung'].unique().tolist()
+        
+        fig_yearly = go.Figure()
+        
+        # Für jede Richtung Balken mit Error-Bars hinzufügen
+        for richtung in richtungen_liste:
+            richtung_data = yearly[yearly['Richtung'] == richtung]
+            farbe = richtung_farben.get(richtung, '#3498db')
+            
+            # Berechne die Abstände für asymmetrische Error-Bars
+            error_minus = richtung_data['Anzahl'] - richtung_data['Min']
+            error_plus = richtung_data['Max'] - richtung_data['Anzahl']
+            
+            fig_yearly.add_trace(go.Bar(
+                x=richtung_data['Jahr'],
+                y=richtung_data['Anzahl'],
+                name=richtung,
+                marker_color=farbe,
+                text=richtung_data['Anzahl_fmt'],
+                textposition='outside',
+                error_y=dict(
+                    type='data',
+                    symmetric=False,
+                    array=error_plus,
+                    arrayminus=error_minus,
+                    color='#555',
+                    thickness=1.5,
+                    width=4
+                ),
+                customdata=np.column_stack([
+                    richtung_data['Anzahl_fmt'], 
+                    richtung_data['Min_fmt'], 
+                    richtung_data['Max_fmt'],
+                    richtung_data['Min_Datum_fmt'],
+                    richtung_data['Max_Datum_fmt']
+                ]),
+                hovertemplate='Ø: %{customdata[0]}<br>Min: %{customdata[1]} (%{customdata[3]})<br>Max: %{customdata[2]} (%{customdata[4]})<extra></extra>'
+            ))
+        
+        fig_yearly.update_layout(
+            barmode='group',
+            xaxis_title='',
+            yaxis_title='Ø Fahrzeuge/Tag',
+            legend_title='Richtung'
+        )
+        st.plotly_chart(fig_yearly, use_container_width=True)
+        st.caption("📊 Die Fehlerbalken zeigen das minimale und maximale Tagesmittel pro Jahr.")
+    
+    with tab_total:
+        yearly_sum = filtered.groupby(['Jahr', 'Richtung'])['Anzahl'].sum().reset_index()
+        yearly_sum['Anzahl_fmt'] = yearly_sum['Anzahl'].apply(lambda x: format_number_ch(x))
+        yearly_total_sum = filtered.groupby('Jahr')['Anzahl'].sum().reset_index()
+        
+        cols_total = st.columns(len(selected_jahre))
         for i, jahr in enumerate(sorted(selected_jahre)):
-            with cols_yearly[i]:
+            with cols_total[i]:
                 corr_data = next((c for c in yearly_corrected if c['Jahr'] == jahr), None)
-                if corr_data:
-                    formatted_val = format_number(corr_data['DTV'])
+                total_val = yearly_total_sum[yearly_total_sum['Jahr'] == jahr]['Anzahl'].values
+                if len(total_val) > 0 and corr_data:
+                    formatted_total = format_number(total_val[0])
                     gap_days = corr_data['Tage_Lücken']
-                    vollst = corr_data['Vollständigkeit']
+                    tage_daten = corr_data['Tage_Daten']
                     if gap_days > 1:
-                        st.metric(label=f"{jahr}", value=formatted_val,
-                                  help=f"Ø Fahrzeuge/Tag | Vollständigkeit: {vollst:.1f}% | {gap_days:.0f} Tage fehlen")
-                        st.caption(f"⚠️ {gap_days:.0f} Tage fehlen")
+                        schaetzung = total_val[0] * (365 / tage_daten) if tage_daten > 0 else total_val[0]
+                        st.metric(label=f"{jahr}", value=formatted_total,
+                                  help=f"Gemessene Fahrzeuge | {tage_daten} Tage mit Daten")
+                        st.caption(f"Hochrechnung: ~{format_number(schaetzung)}")
                     else:
-                        st.metric(label=f"{jahr}", value=formatted_val,
-                                  help=f"Ø Fahrzeuge/Tag | Vollständigkeit: {vollst:.1f}%")
+                        st.metric(label=f"{jahr}", value=formatted_total,
+                                  help=f"Gemessene Fahrzeuge | {tage_daten} Tage mit Daten")
         
-        years_with_gaps = [c for c in yearly_corrected if c['Tage_Lücken'] > 7]
-        if years_with_gaps:
-            st.info("ℹ️ **Hinweis:** Einige Jahre haben grössere Datenlücken. "
-                    "Der Ø Tagesverkehr (DTV) basiert nur auf den verfügbaren Tagen.")
-        
-        daily_by_year = filtered.groupby(['Jahr', 'Datum_Tag', 'Richtung'])['Anzahl'].sum().reset_index()
-        yearly = daily_by_year.groupby(['Jahr', 'Richtung'])['Anzahl'].mean().reset_index()
-        yearly['Anzahl_fmt'] = yearly['Anzahl'].apply(lambda x: format_number_ch(x))
-        
-        tab_dtv, tab_total = st.tabs(["Ø Tagesverkehr (DTV)", "Gesamtanzahl"])
-        
-        with tab_dtv:
-            fig_yearly = px.bar(
-                yearly, x='Jahr', y='Anzahl', color='Richtung', barmode='group',
-                labels={'Jahr': '', 'Anzahl': 'Ø Fahrzeuge/Tag', 'Richtung': 'Richtung'},
-                text='Anzahl_fmt', color_discrete_sequence=['#3498db', '#e74c3c'], custom_data=['Anzahl_fmt']
-            )
-            fig_yearly.update_traces(textposition='outside', hovertemplate='%{customdata[0]}<extra></extra>')
-            st.plotly_chart(fig_yearly, use_container_width=True)
-        
-        with tab_total:
-            yearly_sum = filtered.groupby(['Jahr', 'Richtung'])['Anzahl'].sum().reset_index()
-            yearly_sum['Anzahl_fmt'] = yearly_sum['Anzahl'].apply(lambda x: format_number_ch(x))
-            yearly_total_sum = filtered.groupby('Jahr')['Anzahl'].sum().reset_index()
-            
-            cols_total = st.columns(len(selected_jahre))
-            for i, jahr in enumerate(sorted(selected_jahre)):
-                with cols_total[i]:
-                    corr_data = next((c for c in yearly_corrected if c['Jahr'] == jahr), None)
-                    total_val = yearly_total_sum[yearly_total_sum['Jahr'] == jahr]['Anzahl'].values
-                    if len(total_val) > 0 and corr_data:
-                        formatted_total = format_number(total_val[0])
-                        gap_days = corr_data['Tage_Lücken']
-                        tage_daten = corr_data['Tage_Daten']
-                        if gap_days > 1:
-                            schaetzung = total_val[0] * (365 / tage_daten) if tage_daten > 0 else total_val[0]
-                            st.metric(label=f"{jahr}", value=formatted_total,
-                                      help=f"Gemessene Fahrzeuge | {tage_daten} Tage mit Daten")
-                            st.caption(f"Hochrechnung: ~{format_number(schaetzung)}")
-                        else:
-                            st.metric(label=f"{jahr}", value=formatted_total,
-                                      help=f"Gemessene Fahrzeuge | {tage_daten} Tage mit Daten")
-            
-            fig_yearly_sum = px.bar(
-                yearly_sum, x='Jahr', y='Anzahl', color='Richtung', barmode='group',
-                labels={'Jahr': '', 'Anzahl': 'Fahrzeuge gesamt', 'Richtung': 'Richtung'},
-                text='Anzahl_fmt', color_discrete_sequence=['#3498db', '#e74c3c'], custom_data=['Anzahl_fmt']
-            )
-            fig_yearly_sum.update_traces(textposition='outside', hovertemplate='%{customdata[0]}<extra></extra>')
-            st.plotly_chart(fig_yearly_sum, use_container_width=True)
-            st.caption("💡 **Hinweis:** Die Gesamtzahlen sind bei Datenlücken nicht direkt vergleichbar.")
+        fig_yearly_sum = px.bar(
+            yearly_sum, x='Jahr', y='Anzahl', color='Richtung', barmode='group',
+            labels={'Jahr': '', 'Anzahl': 'Fahrzeuge gesamt', 'Richtung': 'Richtung'},
+            text='Anzahl_fmt', color_discrete_sequence=['#3498db', '#e74c3c'], custom_data=['Anzahl_fmt']
+        )
+        fig_yearly_sum.update_traces(textposition='outside', hovertemplate='%{customdata[0]}<extra></extra>')
+        st.plotly_chart(fig_yearly_sum, use_container_width=True)
+        st.caption("💡 **Hinweis:** Die Gesamtzahlen sind bei Datenlücken nicht direkt vergleichbar.")
     
     # Zeile 6: Datenqualität
     st.markdown("---")

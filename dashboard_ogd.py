@@ -1,5 +1,5 @@
 """
-Verkehrsdaten Dashboard - Rosengartenbrücke Zürich (OGD Version)
+Verkehrsdaten Dashboard - Rosengartenbrücke Zürich (DuckDB Version)
 Stündliche Verkehrszählung nach Fahrzeugtypen (seit 2020)
 Datenquelle: Open Government Data Stadt Zürich
 """
@@ -12,23 +12,25 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import numpy as np
 import requests
-from io import BytesIO
+import duckdb
+import os
+import tempfile
 import urllib3
 
-# SSL-Warnungen unterdrücken (für OGD-Server mit Zertifikatsproblemen)
+# SSL-Warnungen unterdrücken
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Seiten-Konfiguration
 st.set_page_config(
-    page_title="Verkehr Rosengartenbrücke (OGD)",
+    page_title="Verkehr Rosengartenbrücke (DuckDB)",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# OGD Base URL
-OGD_BASE_URL = "https://data.stadt-zuerich.ch/dataset/ugz_verkehrsdaten_stundenwerte_rosengartenbruecke/download/"
+# OGD Parquet URL
+OGD_PARQUET_URL = "https://data.stadt-zuerich.ch/dataset/ugz_verkehrsdaten_stundenwerte_rosengartenbruecke/download/ugz_ogd_traffic_rosengartenbruecke_h1.parquet"
 
-# Farbschema für Fahrzeugklassen
+# Farbschema
 FARBEN = {
     'Personenwagen': '#3498db',
     'Lieferwagen': '#2ecc71',
@@ -41,993 +43,888 @@ FARBEN = {
     'Personenwagen mit Anhänger': '#5dade2',
     'Lieferwagen mit Anhänger': '#58d68d',
     'Lieferwagen mit Auflieger': '#27ae60',
-    'Unbekannt': '#95a5a6'
+    'Unbekannt': '#95a5a6',
+    'Bus/Trolleybus': '#f39c12'
 }
 
-
-def get_ogd_url(year):
-    """Generiert die Download-URL für ein bestimmtes Jahr."""
-    return f"{OGD_BASE_URL}ugz_ogd_traffic_rosengartenbruecke_h1_{year}.csv"
-
-
-@st.cache_data(ttl=86400)  # 24h Cache für historische Jahre
-def load_year_from_ogd(year):
-    """Lädt Daten für ein Jahr direkt vom OGD Portal."""
-    url = get_ogd_url(year)
-    try:
-        response = requests.get(url, timeout=60, verify=False)
-        response.raise_for_status()
-        return pd.read_csv(BytesIO(response.content), encoding='utf-8-sig')
-    except requests.exceptions.RequestException as e:
-        st.warning(f"Fehler beim Laden der Daten für {year}: {e}")
-        return None
-
-
-@st.cache_data(ttl=3600)  # 1h Cache für aktuelles Jahr
-def load_current_year_from_ogd(year):
-    """Lädt Daten für das aktuelle Jahr vom OGD Portal (kürzerer Cache)."""
-    url = get_ogd_url(year)
-    try:
-        response = requests.get(url, timeout=60, verify=False)
-        response.raise_for_status()
-        return pd.read_csv(BytesIO(response.content), encoding='utf-8-sig')
-    except requests.exceptions.RequestException as e:
-        st.warning(f"Fehler beim Laden der Daten für {year}: {e}")
-        return None
-
+@st.cache_resource
+def get_db_connection():
+    """Erstellt eine persistente DuckDB-Verbindung im Speicher."""
+    con = duckdb.connect(database=':memory:')
+    return con
 
 @st.cache_data(ttl=3600)
-def load_data_for_years(selected_years):
-    """
-    Lädt nur die ausgewählten Jahresdaten vom OGD Portal.
-    """
-    current_year = datetime.now().year
-    
-    dfs = []
-    
-    for year in selected_years:
-        if year == current_year:
-            # Aktuelles Jahr: kürzerer Cache (1h)
-            df = load_current_year_from_ogd(year)
-        else:
-            # Historische Jahre: längerer Cache (24h)
-            df = load_year_from_ogd(year)
+def download_parquet_file():
+    """Lädt die Parquet-Datei herunter und gibt den Pfad zurück."""
+    try:
+        response = requests.get(OGD_PARQUET_URL, timeout=120, verify=False)
+        response.raise_for_status()
         
-        if df is not None and not df.empty:
-            dfs.append(df)
-    
-    if not dfs:
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, "traffic_data.parquet")
+        
+        with open(temp_path, 'wb') as f:
+            f.write(response.content)
+            
+        return temp_path
+    except Exception as e:
+        st.error(f"Download Fehler: {e}")
         return None
-    
-    data = pd.concat(dfs, ignore_index=True)
-    
-    # Datum parsen (ISO-Format: 2025-01-01T00:00+0100)
-    data['Datum'] = pd.to_datetime(data['Datum'], format='ISO8601')
-    
-    # Zusätzliche Zeitspalten
-    data['Jahr'] = data['Datum'].dt.year
-    data['Monat'] = data['Datum'].dt.month
-    data['Tag'] = data['Datum'].dt.day
-    data['Wochentag'] = data['Datum'].dt.dayofweek
-    data['Wochentag_Name'] = data['Datum'].dt.day_name()
-    data['Stunde'] = data['Datum'].dt.hour
-    data['Kalenderwoche'] = data['Datum'].dt.isocalendar().week
-    data['Datum_Tag'] = data['Datum'].dt.date
-    
-    
-    # Fahrzeugkategorien (zusammengefasst)
-    kategorie_mapping = {
-        'Motorrad': 'Motorrad',
-        'Personenwagen': 'Personenwagen',
-        'Personenwagen mit Anhänger': 'Personenwagen',
-        'Lieferwagen': 'Lieferwagen',
-        'Lieferwagen mit Anhänger': 'Lieferwagen',
-        'Lieferwagen mit Auflieger': 'Lieferwagen',
-        'Lastwagen': 'Lastwagen',
-        'Sattelzug': 'Lastwagen',
-        'Lastenzug': 'Lastwagen',
-        'Bus': 'Bus/Trolleybus',
-        'Trolleybus': 'Bus/Trolleybus',
-        'Unbekannt': 'Unbekannt'
-    }
-    data['Kategorie'] = data['Klasse.Text'].map(kategorie_mapping)
-    
-    return data
 
+def init_duckdb(con, parquet_path):
+    """Initialisiert die DuckDB Tabellen."""
+    # Prüfen ob Tabelle schon existiert
+    tables = con.execute("SHOW TABLES").fetchall()
+    if ('traffic',) in tables:
+        return
+
+    # Datum processing: 
+    # The 'Datum' column in the Parquet file is stored as a Timestamp with Timezone Etc/GMT-1 (UTC+1, fixed CET).
+    # It does NOT account for DST (Summer time).
+    # To get correct local time for Zurich (Europe/Zurich), we need to convert the timezone.
+    # However, since DuckDB's time zone handling can be complex with 'Etc/GMT-1', and to match the original pandas logic
+    # (which likely just took the hour component of the provided timestamp), we'll read it as is.
+    # If explicit conversion to local time (DST aware) is needed:
+    #   CAST(Datum AS TIMESTAMPTZ) AT TIME ZONE 'Europe/Zurich'
+    # For now, we respect the user's note about the data format.
+    con.execute(f"""
+        CREATE OR REPLACE TABLE traffic AS 
+        SELECT 
+            *,
+            CAST(Datum AS TIMESTAMP) as Datum_Obs,
+            year(Datum) as Jahr,
+            month(Datum) as Monat,
+            day(Datum) as Tag,
+            dayofweek(Datum) as Wochentag_ISO,
+            hour(Datum) as Stunde,
+            week(Datum) as Kalenderwoche,
+            strftime(Datum, '%Y-%m-%d') as Datum_Tag_Str,
+            CASE 
+                WHEN "Klasse.Text" IN ('Motorrad') THEN 'Motorrad'
+                WHEN "Klasse.Text" IN ('Personenwagen', 'Personenwagen mit Anhänger') THEN 'Personenwagen'
+                WHEN "Klasse.Text" IN ('Lieferwagen', 'Lieferwagen mit Anhänger', 'Lieferwagen mit Auflieger') THEN 'Lieferwagen'
+                WHEN "Klasse.Text" IN ('Lastwagen', 'Sattelzug', 'Lastenzug') THEN 'Lastwagen'
+                WHEN "Klasse.Text" IN ('Bus', 'Trolleybus') THEN 'Bus/Trolleybus'
+                ELSE 'Unbekannt'
+            END as Kategorie
+        FROM read_parquet('{parquet_path.replace(os.sep, '/')}')
+    """)
+    
+    con.execute("""
+        ALTER TABLE traffic ADD COLUMN Wochentag INTEGER;
+        UPDATE traffic SET Wochentag = CASE 
+            WHEN Wochentag_ISO = 0 THEN 6 
+            ELSE Wochentag_ISO - 1 
+        END;
+    """)
 
 def format_number(num):
-    """Formatiert große Zahlen mit Schweizer Tausendertrennzeichen (')."""
+    if num is None: return "0"
     num = int(round(num))
     return f"{num:,}".replace(',', "'")
 
-
 def format_number_ch(num):
-    """Formatiert Zahlen im Schweizer Format für Plotly customdata."""
-    if pd.isna(num):
+    if pd.isna(num) or num is None:
         return "–"
     return f"{int(round(num)):,}".replace(',', "'")
 
-
-@st.cache_data(ttl=3600)
-def analyze_data_gaps(data):
-    """Analysiert Datenlücken in den Verkehrsdaten (Stundenbasis)."""
-    start = data['Datum'].min()
-    end = data['Datum'].max()
-    full_range = pd.date_range(start=start, end=end, freq='h')
-    
-    vorhanden = set(data['Datum'].unique())
-    fehlend = sorted(set(full_range) - vorhanden)
-    
-    gaps = []
-    if fehlend:
-        gap_start = fehlend[0]
-        gap_end = fehlend[0]
-        
-        for ts in fehlend[1:]:
-            if ts - gap_end <= timedelta(hours=1):
-                gap_end = ts
-            else:
-                duration_h = (gap_end - gap_start).total_seconds() / 3600 + 1
-                gaps.append({
-                    'start': gap_start,
-                    'end': gap_end,
-                    'duration_h': duration_h,
-                    'is_dst': gap_start.month == 3 and gap_start.hour == 2 and duration_h <= 1
-                })
-                gap_start = ts
-                gap_end = ts
-        
-        duration_h = (gap_end - gap_start).total_seconds() / 3600 + 1
-        gaps.append({
-            'start': gap_start,
-            'end': gap_end,
-            'duration_h': duration_h,
-            'is_dst': gap_start.month == 3 and gap_start.hour == 2 and duration_h <= 1
-        })
-    
-    yearly_stats = []
-    for jahr in sorted(data['Jahr'].unique()):
-        jahr_data = data[data['Jahr'] == jahr]
-        jahr_start = jahr_data['Datum'].min()
-        jahr_end = jahr_data['Datum'].max()
-        
-        expected = pd.date_range(start=jahr_start, end=jahr_end, freq='h')
-        actual = jahr_data['Datum'].unique()
-        missing = len(expected) - len(actual)
-        
-        gap_hours = sum(g['duration_h'] for g in gaps 
-                       if g['start'].year == jahr and g['duration_h'] > 1 and not g['is_dst'])
-        
-        yearly_stats.append({
-            'jahr': jahr,
-            'start': jahr_start,
-            'end': jahr_end,
-            'expected': len(expected),
-            'actual': len(actual),
-            'missing': missing,
-            'completeness': 100 * len(actual) / len(expected) if len(expected) > 0 else 0,
-            'gap_hours': gap_hours,
-            'gap_days': gap_hours / 24
-        })
-    
-    return {
-        'gaps': gaps,
-        'yearly_stats': yearly_stats,
-        'total_missing': len(fehlend)
-    }
-
-
 def main():
-    # Header
     st.title("Verkehrsdaten Rosengartenbrücke (OGD)")
-    st.markdown("**Stündliche Verkehrszählung nach Fahrzeugtypen** | Datenquelle: [Open Data Zürich](https://data.stadt-zuerich.ch/dataset/ugz_verkehrsdaten_stundenwerte_rosengartenbruecke) | [Sensorpositionen (Karte)](https://s.geo.admin.ch/6cr2y1s13xwp)")
+    st.markdown("Stündliche Verkehrszählung nach Fahrzeugtypen | Datenquelle: [Open Data Zürich](https://data.stadt-zuerich.ch/dataset/ugz_verkehrsdaten_stundenwerte_rosengartenbruecke) | [Sensorpositionen (Karte)](https://s.geo.admin.ch/6cr2y1s13xwp)")
     
-    # --- SIDEBAR: Filter ---
+    # Init DB
+    parquet_path = download_parquet_file()
+    if not parquet_path:
+        return
+
+    con = get_db_connection()
+    init_duckdb(con, parquet_path)
+    
+    # --- FILTERS ---
     st.sidebar.header("Filter")
     
-    # Verfügbare Jahre (2020 bis aktuelles Jahr)
-    current_year = datetime.now().year
-    available_years = list(range(2020, current_year + 1))
+    # Jahre abfragen
+    years_df = con.execute("SELECT DISTINCT Jahr FROM traffic ORDER BY Jahr DESC").df()
+    available_years = years_df['Jahr'].tolist()
     
-    # Jahresfilter - ZUERST wählen, dann laden
     selected_jahre = st.sidebar.multiselect(
         "Jahre",
         options=available_years,
-        default=[current_year],
-        help="Wählen Sie die Jahre aus, die geladen werden sollen"
+        default=[available_years[0]] if available_years else [],
     )
     
     if not selected_jahre:
         st.warning("Bitte wählen Sie mindestens ein Jahr aus.")
         return
+
+    # Base Filter Condition
+    years_str = ",".join(map(str, selected_jahre))
+    where_clause = f"Jahr IN ({years_str})"
     
-    # Daten nur für ausgewählte Jahre laden
-    with st.spinner(f"Daten für {', '.join(map(str, selected_jahre))} werden geladen..."):
-        data = load_data_for_years(tuple(sorted(selected_jahre)))
-    
-    if data is None or data.empty:
-        st.error("Keine Daten verfügbar.")
-        return
-    
-    # Richtungsfilter
-    richtungen = data['Richtung'].unique().tolist()
+    # Richtungen
+    richt_df = con.execute(f"SELECT DISTINCT Richtung FROM traffic WHERE {where_clause}").df()
     selected_richtungen = st.sidebar.multiselect(
         "Richtung",
-        options=richtungen,
-        default=richtungen
+        options=richt_df['Richtung'].tolist(),
+        default=richt_df['Richtung'].tolist()
     )
     
-    # Fahrzeugklassen-Filter
-    klassen_sorted = data.groupby('Klasse.Text')['Anzahl'].sum().sort_values(ascending=False).index.tolist()
+    # Klassen
+    klassen_df = con.execute(f"""
+        SELECT "Klasse.Text", SUM(Anzahl) as Total 
+        FROM traffic 
+        WHERE {where_clause} 
+        GROUP BY 1 ORDER BY 2 DESC
+    """).df()
     selected_klassen = st.sidebar.multiselect(
         "Fahrzeugklassen",
-        options=klassen_sorted,
-        default=klassen_sorted
+        options=klassen_df['Klasse.Text'].tolist(),
+        default=klassen_df['Klasse.Text'].tolist()
     )
     
-    # Wochentag-Filter
+    # Wochentage
     wochentage = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']
-    wochentag_map = {d: i for i, d in enumerate(wochentage)}
-    selected_wochentage = st.sidebar.multiselect(
-        "Wochentage",
-        options=wochentage,
-        default=wochentage
-    )
-    selected_wochentag_ids = [wochentag_map[w] for w in selected_wochentage]
+    selected_wochentage = st.sidebar.multiselect("Wochentage", options=wochentage, default=wochentage)
+    selected_wt_ids = [wochentage.index(w) for w in selected_wochentage]
     
-    # Daten filtern
     if not selected_richtungen or not selected_klassen or not selected_wochentage:
-        st.warning("Bitte wählen Sie mindestens einen Wert für jeden Filter.")
+        st.warning("Bitte wählen Sie Filter.")
         return
+
+    # Build WHERE clause
+    richt_list = "'" + "','".join(selected_richtungen) + "'"
+    klass_list = "'" + "','".join(selected_klassen) + "'"
+    wt_list = ",".join(map(str, selected_wt_ids))
     
-    filtered = data[
-        (data['Richtung'].isin(selected_richtungen)) &
-        (data['Klasse.Text'].isin(selected_klassen)) &
-        (data['Wochentag'].isin(selected_wochentag_ids))
-    ]
+    final_where = f"""
+        {where_clause} 
+        AND Richtung IN ({richt_list})
+        AND "Klasse.Text" IN ({klass_list})
+        AND Wochentag IN ({wt_list})
+    """
     
-    if filtered.empty:
-        st.warning("Keine Daten für die gewählten Filter gefunden.")
-        return
+    # === DATA QUALITY CHECK / VALID DAYS ===
+    # A "valid day" is defined as having at least 22 hours of data in BOTH directions.
+    # We calculate this once to use in multiple charts.
     
-    # === KPI KACHELN ===
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE valid_days AS
+        WITH hourly_counts AS (
+            SELECT 
+                Datum_Tag_Str,
+                Richtung,
+                COUNT(DISTINCT Stunde) as HoursPresent
+            FROM traffic
+            GROUP BY 1, 2
+        ),
+        valid_directions AS (
+            SELECT Datum_Tag_Str
+            FROM hourly_counts
+            WHERE HoursPresent >= 22
+        )
+        SELECT Datum_Tag_Str
+        FROM valid_directions
+        GROUP BY 1
+        HAVING COUNT(*) >= 2
+    """)
+    
+    # === KPI ===
     st.markdown("---")
     col1, col2, col3, col4 = st.columns(4)
     
-    total_vehicles = filtered['Anzahl'].sum()
-    avg_daily = filtered.groupby('Datum_Tag')['Anzahl'].sum().mean()
-    peak_hour_data = filtered.groupby('Stunde')['Anzahl'].sum()
-    peak_hour = peak_hour_data.idxmax()
-    days_count = filtered['Datum_Tag'].nunique()
+    # Single Query for KPIs is usually faster
+    kpi_df = con.execute(f"""
+        SELECT 
+            SUM(Anzahl) as Total,
+            COUNT(DISTINCT Datum_Tag_Str) as Days
+        FROM traffic
+        WHERE {final_where}
+    """).df()
     
-    with col1:
-        st.metric(label="Fahrzeuge gesamt", value=format_number(total_vehicles))
-    with col2:
-        st.metric(label="Ø Tagesverkehr (DTV)", value=format_number(avg_daily))
-    with col3:
-        st.metric(label="Spitzenstunde", value=f"{peak_hour}:00 - {peak_hour+1}:00")
-    with col4:
-        st.metric(label="Tage im Datensatz", value=f"{days_count:,}".replace(',', "'"))
+    # DTV Query (Average Sum per Day)
+    dtv_df = con.execute(f"""
+        WITH daily_sums AS (
+            SELECT Datum_Tag_Str, SUM(Anzahl) as DayTotal
+            FROM traffic
+            WHERE {final_where}
+            GROUP BY Datum_Tag_Str
+        )
+        SELECT AVG(DayTotal) as DTV FROM daily_sums
+    """).df()
     
-    # === LETZTE 7 TAGE: Verlauf Personenwagen, Lastwagen, Lieferwagen ===
+    # Peak Hour
+    peak_df = con.execute(f"""
+        SELECT Stunde, SUM(Anzahl) as Val 
+        FROM traffic 
+        WHERE {final_where}
+        GROUP BY 1 ORDER BY 2 DESC LIMIT 1
+    """).df()
+    
+    total_vehicles = kpi_df['Total'][0] if not kpi_df.empty else 0
+    days_count = kpi_df['Days'][0] if not kpi_df.empty else 0
+    avg_daily = dtv_df['DTV'][0] if not dtv_df.empty else 0
+    peak_hour = peak_df['Stunde'][0] if not peak_df.empty else 0
+    
+    with col1: st.metric("Fahrzeuge gesamt", format_number(total_vehicles))
+    with col2: st.metric("Ø Tagesverkehr (DTV)", format_number(avg_daily))
+    with col3: st.metric("Spitzenstunde", f"{peak_hour}:00 - {peak_hour+1}:00")
+    with col4: st.metric("Tage im Datensatz", format_number(days_count))
+
+    # === LETZTE 7 TAGE ===
     st.markdown("---")
     st.subheader("Letzte 7 Tage: Personenwagen, Lastwagen & Lieferwagen (Stundenwerte)")
     
-    # Daten für die letzten 7 Tage (aus Gesamtdaten, unabhängig von Filterung)
-    max_datum = data['Datum'].max()
-    start_7_tage = max_datum - timedelta(days=7)
-    
-    data_7_tage = data[
-        (data['Datum'] >= start_7_tage) &
-        (data['Kategorie'].isin(['Personenwagen', 'Lastwagen', 'Lieferwagen']))
-    ]
-    
-    if not data_7_tage.empty:
-        # Aggregieren nach Stunde und Kategorie (stündliche Werte)
-        hourly_7_tage = data_7_tage.groupby(['Datum', 'Kategorie'])['Anzahl'].sum().reset_index()
-        hourly_7_tage['Anzahl_fmt'] = hourly_7_tage['Anzahl'].apply(lambda x: format_number_ch(x))
-        hourly_7_tage['Datum_Label'] = hourly_7_tage['Datum'].dt.strftime('%a %d.%m. %H:%M')
+    # Get Max Date first
+    max_date_df = con.execute("SELECT MAX(Datum_Obs) as MaxDatum FROM traffic").df()
+    if not max_date_df.empty and pd.notna(max_date_df['MaxDatum'][0]):
+        max_datum = max_date_df['MaxDatum'][0]
+        start_7_tage = max_datum - timedelta(days=7)
         
-        kategorie_farben_7t = {
-            'Personenwagen': '#3498db',
-            'Lieferwagen': '#2ecc71', 
-            'Lastwagen': '#9b59b6'
-        }
+        # Query last 7 days
+        # Note: categories are hardcoded as in original dashboard
+        last7_df = con.execute(f"""
+            SELECT 
+                Datum_Obs as Datum, 
+                Kategorie, 
+                SUM(Anzahl) as Anzahl
+            FROM traffic
+            WHERE Datum_Obs >= ? 
+            AND Kategorie IN ('Personenwagen', 'Lastwagen', 'Lieferwagen')
+            GROUP BY 1, 2
+            ORDER BY 1
+        """, [start_7_tage]).df()
         
-        # Liniendiagramm mit Stundenwerten
-        fig_7_tage = px.line(
-            hourly_7_tage, 
-            x='Datum', 
-            y='Anzahl', 
-            color='Kategorie',
-            labels={'Datum': 'Datum/Zeit', 'Anzahl': 'Fahrzeuge/Stunde', 'Kategorie': 'Kategorie'},
-            color_discrete_map=kategorie_farben_7t,
-            custom_data=['Anzahl_fmt', 'Kategorie', 'Datum_Label']
-        )
-        fig_7_tage.update_traces(
-            hovertemplate='%{customdata[2]}<br>%{customdata[1]}: %{customdata[0]}<extra></extra>',
-            line=dict(width=2)
-        )
-        fig_7_tage.update_layout(
-            hovermode='x unified',
-            xaxis=dict(
-                tickformat='%a %d.%m.',
-                dtick='D1'
-            ),
-            legend=dict(
-                orientation='h',
-                yanchor='bottom',
-                y=1.02,
-                xanchor='left',
-                x=0
-            ),
-            height=400
-        )
-        
-        col_chart, col_stats = st.columns([3, 1])
-        
-        with col_chart:
-            st.plotly_chart(fig_7_tage, use_container_width=True)
-        
-        with col_stats:
-            # Statistiken für die letzten 7 Tage
-            st.markdown("**Ø pro Stunde (7 Tage)**")
-            for kategorie in ['Personenwagen', 'Lieferwagen', 'Lastwagen']:
-                kat_data = hourly_7_tage[hourly_7_tage['Kategorie'] == kategorie]
-                if not kat_data.empty:
-                    avg_val = kat_data['Anzahl'].mean()
-                    color = kategorie_farben_7t[kategorie]
-                    st.markdown(f"<span style='color:{color};font-weight:bold;'>{kategorie}:</span> {format_number(avg_val)}", 
-                               unsafe_allow_html=True)
+        if not last7_df.empty:
+            last7_df['Anzahl_fmt'] = last7_df['Anzahl'].apply(format_number_ch)
+            last7_df['Datum_Label'] = last7_df['Datum'].dt.strftime('%a %d.%m. %H:%M')
             
-            st.markdown("---")
-            st.markdown("**Ø pro Tag (7 Tage)**")
-            daily_totals = data_7_tage.groupby(['Datum_Tag', 'Kategorie'])['Anzahl'].sum().reset_index()
-            for kategorie in ['Personenwagen', 'Lieferwagen', 'Lastwagen']:
-                kat_data = daily_totals[daily_totals['Kategorie'] == kategorie]
-                if not kat_data.empty:
-                    avg_val = kat_data['Anzahl'].mean()
-                    color = kategorie_farben_7t[kategorie]
-                    st.markdown(f"<span style='color:{color};font-weight:bold;'>{kategorie}:</span> {format_number(avg_val)}", 
-                               unsafe_allow_html=True)
+            kategorie_farben_7t = {
+                'Personenwagen': '#3498db',
+                'Lieferwagen': '#2ecc71', 
+                'Lastwagen': '#9b59b6'
+            }
             
-            st.markdown("---")
-            st.markdown("**Zeitraum**")
-            st.caption(f"{start_7_tage.strftime('%d.%m.%Y')} – {max_datum.strftime('%d.%m.%Y')}")
+            fig_7 = px.line(
+                last7_df, x='Datum', y='Anzahl', color='Kategorie',
+                labels={'Datum': 'Datum/Zeit', 'Anzahl': 'Fahrzeuge/Stunde'},
+                color_discrete_map=kategorie_farben_7t,
+                custom_data=['Anzahl_fmt', 'Kategorie', 'Datum_Label']
+            )
+            fig_7.update_traces(
+                hovertemplate='%{customdata[2]}<br>%{customdata[1]}: %{customdata[0]}<extra></extra>',
+                line=dict(width=2)
+            )
+            fig_7.update_layout(
+                hovermode='x unified',
+                xaxis=dict(tickformat='%a %d.%m.', dtick='D1'),
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0),
+                height=400
+            )
+            
+            col_chart, col_stats = st.columns([3, 1])
+            with col_chart:
+                st.plotly_chart(fig_7, use_container_width=True)
+            
+            with col_stats:
+                st.markdown("**Ø pro Stunde (7 Tage)**")
+                avg_hourly = last7_df.groupby('Kategorie')['Anzahl'].mean()
+                for cat in ['Personenwagen', 'Lieferwagen', 'Lastwagen']:
+                    if cat in avg_hourly:
+                        st.markdown(f"<span style='color:{kategorie_farben_7t[cat]};font-weight:bold;'>{cat}:</span> {format_number(avg_hourly[cat])}", unsafe_allow_html=True)
+
+                st.markdown("---")
+                st.markdown("**Ø pro Tag (7 Tage)**")
+                # Daily average calc
+                daily_sums = last7_df.copy()
+                daily_sums['Tag'] = daily_sums['Datum'].dt.date
+                avg_daily_7 = daily_sums.groupby(['Tag', 'Kategorie'])['Anzahl'].sum().reset_index().groupby('Kategorie')['Anzahl'].mean()
+                
+                for cat in ['Personenwagen', 'Lieferwagen', 'Lastwagen']:
+                    if cat in avg_daily_7:
+                        st.markdown(f"<span style='color:{kategorie_farben_7t[cat]};font-weight:bold;'>{cat}:</span> {format_number(avg_daily_7[cat])}", unsafe_allow_html=True)
+                
+                st.markdown("---")
+                st.caption(f"{start_7_tage.strftime('%d.%m.%Y')} – {max_datum.strftime('%d.%m.%Y')}")
+        else:
+            st.info("Keine Daten für die letzten 7 Tage.")
     else:
-        st.info("Keine Daten für die letzten 7 Tage verfügbar.")
-    
-    # === CHARTS ===
+        st.info("Keine Daten verfügbar.")
+
+    # === DIAGRAMME ===
     st.markdown("---")
     
+    # === NEU: Täglicher Gesamtverkehr (Chronologie) mit Auswahl ===
+    st.subheader("Täglicher Verkehr (Chronologie)")
+
+    # Auswahl für die Aufteilung
+    split_daily = st.radio(
+        "Aufteilung nach:",
+        ["Fahrzeugklasse", "Richtung"],
+        horizontal=True,
+        key="daily_split_radio"
+    )
+
+    # Je nach Auswahl gruppieren wir anders
+    if split_daily == "Fahrzeugklasse":
+        group_col = "Kategorie"
+        color_col = "Kategorie"
+        title_suffix = "nach Fahrzeugklasse"
+    else:
+        group_col = "Richtung"
+        color_col = "Richtung"
+        title_suffix = "nach Richtung"
+    
+    # Für diese Grafik ignorieren wir den Jahresfilter, aber behalten die anderen Filter bei
+    # Use "1=1" as base to append other filters without Year restriction
+    timeline_where = f"""
+        1=1
+        AND Richtung IN ({richt_list})
+        AND "Klasse.Text" IN ({klass_list})
+        AND Wochentag IN ({wt_list})
+    """
+    
+    query_daily = f"""
+        SELECT 
+            Datum_Tag_Str as Datum, 
+            {group_col} as Grouping, 
+            SUM(Anzahl) as Anzahl
+        FROM traffic
+        WHERE {timeline_where}
+        GROUP BY 1, 2
+        ORDER BY 1
+    """
+
+    daily_data = con.execute(query_daily).df()
+    
+    if not daily_data.empty:
+        # Convert Datum to datetime for better axis handling
+        daily_data['Datum'] = pd.to_datetime(daily_data['Datum'])
+        
+        # Calculate initial range (last 30 days of the dataset)
+        max_date_val = daily_data['Datum'].max()
+        min_date_val = max_date_val - timedelta(days=30)
+        
+        # Determine color map
+        if split_daily == "Fahrzeugklasse":
+            color_map = FARBEN
+        else:
+            # Simple color map for directions if not defined globally
+            color_map = None 
+
+        fig_daily = px.bar(
+            daily_data, x='Datum', y='Anzahl', color='Grouping',
+            color_discrete_map=color_map,
+            labels={'Datum': 'Datum', 'Anzahl': 'Fahrzeuge pro Tag', 'Grouping': split_daily},
+            title=f'Täglicher Gesamtverkehr - Gesamter Zeitraum ({title_suffix})'
+        )
+        
+        fig_daily.update_layout(
+            barmode='stack',
+            xaxis=dict(
+                rangeselector=dict(
+                    buttons=list([
+                        dict(count=7, label="1w", step="day", stepmode="backward"),
+                        dict(count=1, label="1m", step="month", stepmode="backward"),
+                        dict(count=6, label="6m", step="month", stepmode="backward"),
+                        dict(count=1, label="YTD", step="year", stepmode="todate"),
+                        dict(count=1, label="1y", step="year", stepmode="backward"),
+                        dict(step="all")
+                    ])
+                ),
+                rangeslider=dict(visible=True),
+                type="date",
+                range=[min_date_val, max_date_val] # Set initial view range to last 30 days
+            ),
+            yaxis=dict(fixedrange=False),
+            height=500,
+            dragmode="pan" # Optimize interaction for scrolling
+        )
+        st.plotly_chart(fig_daily, use_container_width=True)
+
     # Zeile 1a: Tagesverlauf und Wochenverlauf nach Richtung
     st.subheader("Tages- und Wochenverlauf nach Richtung")
     col_left, col_right = st.columns(2)
     
     with col_left:
-        # Tagesverlauf nach Richtung
-        hourly_dir = filtered.groupby(['Richtung', 'Stunde'])['Anzahl'].mean().reset_index()
-        hourly_dir['Anzahl_fmt'] = hourly_dir['Anzahl'].apply(lambda x: format_number_ch(x))
+        hourly_dir = con.execute(f"""
+            SELECT Richtung, Stunde, AVG(Anzahl) as Anzahl
+            FROM traffic
+            WHERE {final_where}
+            GROUP BY 1, 2
+            ORDER BY 2, 1
+        """).df()
+        
         fig_hourly_dir = px.line(
             hourly_dir, x='Stunde', y='Anzahl', color='Richtung',
-            labels={'Stunde': 'Uhrzeit', 'Anzahl': 'Ø Fahrzeuge/Stunde', 'Richtung': 'Richtung'},
-            markers=True, color_discrete_sequence=['#3498db', '#e74c3c'],
-            custom_data=['Anzahl_fmt']
+            labels={'Stunde': 'Uhrzeit', 'Anzahl': 'Ø Fahrzeuge/Stunde'},
+            markers=True, color_discrete_map={'Bucheggplatz': '#3498db', 'Hardbrücke': '#e74c3c'}
         )
-        fig_hourly_dir.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
-        fig_hourly_dir.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=2), hovermode='x unified', title='Tagesverlauf')
         st.plotly_chart(fig_hourly_dir, use_container_width=True)
-    
+        
     with col_right:
-        # Wochenverlauf nach Richtung
-        daily_totals_dir = filtered.groupby(['Datum_Tag', 'Wochentag', 'Richtung'])['Anzahl'].sum().reset_index()
-        weekly_dir = daily_totals_dir.groupby(['Richtung', 'Wochentag'])['Anzahl'].mean().reset_index()
-        weekly_dir['Wochentag_Name'] = weekly_dir['Wochentag'].map({i: d for i, d in enumerate(['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'])})
-        weekly_dir['Anzahl_fmt'] = weekly_dir['Anzahl'].apply(lambda x: format_number_ch(x))
+        weekly_dir = con.execute(f"""
+            SELECT Richtung, Wochentag, AVG(DaySum) as Anzahl
+            FROM (
+                SELECT Richtung, Wochentag, Datum_Tag_Str, SUM(Anzahl) as DaySum
+                FROM traffic
+                WHERE {final_where}
+                GROUP BY 1, 2, 3
+            )
+            GROUP BY 1, 2
+            ORDER BY 2
+        """).df()
+        
+        wt_map = {0: 'Mo', 1: 'Di', 2: 'Mi', 3: 'Do', 4: 'Fr', 5: 'Sa', 6: 'So'}
+        weekly_dir['Wochentag_Name'] = weekly_dir['Wochentag'].map(wt_map)
+        
         fig_weekly_dir = px.bar(
             weekly_dir, x='Wochentag_Name', y='Anzahl', color='Richtung', barmode='group',
-            labels={'Wochentag_Name': 'Wochentag', 'Anzahl': 'Ø Fahrzeuge/Tag', 'Richtung': 'Richtung'},
-            category_orders={'Wochentag_Name': ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']},
-            color_discrete_sequence=['#3498db', '#e74c3c'], custom_data=['Anzahl_fmt']
+            labels={'Wochentag_Name': 'Wochentag', 'Anzahl': 'Ø Fahrzeuge/Tag'},
+            color_discrete_map={'Bucheggplatz': '#3498db', 'Hardbrücke': '#e74c3c'}
         )
-        fig_weekly_dir.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
-        fig_weekly_dir.update_layout(title='Wochenverlauf')
         st.plotly_chart(fig_weekly_dir, use_container_width=True)
-    
-    # Zeile 1b: Tagesverlauf und Wochenverlauf nach Jahr
+
+    # Zeile 1b: Nach Jahr (falls > 1 Jahr)
     if len(selected_jahre) > 1:
         st.subheader("Tages- und Wochenverlauf nach Jahr")
-        col_left_yr, col_right_yr = st.columns(2)
+        col_ly, col_ry = st.columns(2)
+        with col_ly:
+            hourly_yr = con.execute(f"""
+                SELECT Jahr, Stunde, AVG(Anzahl) as Anzahl 
+                FROM traffic
+                WHERE {final_where}
+                GROUP BY 1, 2 ORDER BY 2
+            """).df()
+            hourly_yr['Jahr'] = hourly_yr['Jahr'].astype(str)
+            fig_yr = px.line(hourly_yr, x='Stunde', y='Anzahl', color='Jahr', markers=True, title='Tagesverlauf')
+            st.plotly_chart(fig_yr, use_container_width=True)
         
-        with col_left_yr:
-            hourly_yr = filtered.groupby(['Jahr', 'Stunde'])['Anzahl'].mean().reset_index()
-            hourly_yr['Anzahl_fmt'] = hourly_yr['Anzahl'].apply(lambda x: format_number_ch(x))
-            fig_hourly_yr = px.line(
-                hourly_yr, x='Stunde', y='Anzahl', color='Jahr',
-                labels={'Stunde': 'Uhrzeit', 'Anzahl': 'Ø Fahrzeuge/Stunde', 'Jahr': 'Jahr'},
-                markers=True, custom_data=['Anzahl_fmt']
-            )
-            fig_hourly_yr.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
-            fig_hourly_yr.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=2), hovermode='x unified', title='Tagesverlauf')
-            st.plotly_chart(fig_hourly_yr, use_container_width=True)
-        
-        with col_right_yr:
-            daily_totals_yr = filtered.groupby(['Datum_Tag', 'Wochentag', 'Jahr'])['Anzahl'].sum().reset_index()
-            weekly_yr = daily_totals_yr.groupby(['Jahr', 'Wochentag'])['Anzahl'].mean().reset_index()
-            weekly_yr['Wochentag_Name'] = weekly_yr['Wochentag'].map({i: d for i, d in enumerate(['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'])})
-            weekly_yr['Anzahl_fmt'] = weekly_yr['Anzahl'].apply(lambda x: format_number_ch(x))
-            weekly_yr['Jahr'] = weekly_yr['Jahr'].astype(str)  # Als String für diskrete Farben
-            fig_weekly_yr = px.bar(
-                weekly_yr, x='Wochentag_Name', y='Anzahl', color='Jahr', barmode='group',
-                labels={'Wochentag_Name': 'Wochentag', 'Anzahl': 'Ø Fahrzeuge/Tag', 'Jahr': 'Jahr'},
-                category_orders={'Wochentag_Name': ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']},
-                custom_data=['Anzahl_fmt']
-            )
-            fig_weekly_yr.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
-            fig_weekly_yr.update_layout(title='Wochenverlauf')
-            st.plotly_chart(fig_weekly_yr, use_container_width=True)
-    
+        with col_ry:
+            weekly_yr = con.execute(f"""
+                SELECT Jahr, Wochentag, AVG(DaySum) as Anzahl
+                FROM (
+                    SELECT Jahr, Wochentag, Datum_Tag_Str, SUM(Anzahl) as DaySum
+                    FROM traffic
+                    WHERE {final_where}
+                    GROUP BY 1, 2, 3
+                )
+                GROUP BY 1, 2
+                ORDER BY 2
+            """).df()
+            weekly_yr['Wochentag_Name'] = weekly_yr['Wochentag'].map(wt_map)
+            weekly_yr['Jahr'] = weekly_yr['Jahr'].astype(str)
+            
+            fig_w_yr = px.bar(weekly_yr, x='Wochentag_Name', y='Anzahl', color='Jahr', barmode='group', title='Wochenverlauf')
+            st.plotly_chart(fig_w_yr, use_container_width=True)
+
     # === TAGESVERLAUF PRO WOCHENTAG ===
     st.markdown("---")
-    st.subheader("Tagesverlauf pro Wochentag (Gesamtzeitraum)")
-    st.caption("Durchschnittlicher Stundenverlauf für jeden Wochentag über alle ausgewählten Jahre")
+    st.subheader("Tagesverlauf pro Wochentag")
     
-    wochentag_namen_full = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']
+    # Query all at once for efficiency
+    all_wt_hourly = con.execute(f"""
+        SELECT Wochentag, Stunde, AVG(Anzahl) as Anzahl
+        FROM traffic
+        WHERE {final_where}
+        GROUP BY 1, 2
+        ORDER BY 1, 2
+    """).df()
     
-    # Erste Reihe: Mo-Do
-    col_mo, col_di, col_mi, col_do = st.columns(4)
-    wochentag_cols_row1 = [col_mo, col_di, col_mi, col_do]
+    wt_names = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']
     
-    for idx, col in enumerate(wochentag_cols_row1):
-        with col:
-            wt_data = filtered[filtered['Wochentag'] == idx]
-            if not wt_data.empty:
-                hourly_wt_avg = wt_data.groupby('Stunde')['Anzahl'].mean().reset_index()
-                hourly_wt_avg['Anzahl_fmt'] = hourly_wt_avg['Anzahl'].apply(lambda x: format_number_ch(x))
-                fig_wt = px.line(hourly_wt_avg, x='Stunde', y='Anzahl', markers=True,
-                                 color_discrete_sequence=['#2c3e50'], custom_data=['Anzahl_fmt'])
-                fig_wt.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
-                fig_wt.update_layout(
-                    title=dict(text=wochentag_namen_full[idx], font=dict(size=14)),
-                    xaxis=dict(tickmode='linear', tick0=0, dtick=4, title=''),
-                    yaxis=dict(title='Ø Fz/h'), height=250,
-                    margin=dict(l=40, r=20, t=40, b=30), hovermode='x unified'
-                )
-                st.plotly_chart(fig_wt, use_container_width=True)
-            else:
-                st.info(f"Keine Daten für {wochentag_namen_full[idx]}")
+    # Row 1 (Mo-Do)
+    cols1 = st.columns(4)
+    for i in range(4):
+        with cols1[i]:
+            df_w = all_wt_hourly[all_wt_hourly['Wochentag'] == i]
+            if not df_w.empty:
+                fig = px.line(df_w, x='Stunde', y='Anzahl', markers=True, title=wt_names[i])
+                fig.update_layout(height=200, margin=dict(l=20, r=20, t=30, b=20))
+                st.plotly_chart(fig, use_container_width=True)
     
-    # Zweite Reihe: Fr-So + Vergleich
-    col_fr, col_sa, col_so, col_empty = st.columns(4)
-    wochentag_cols_row2 = [(4, col_fr), (5, col_sa), (6, col_so)]
+    # Row 2 (Fr-So + Comp)
+    cols2 = st.columns(4)
+    for i in range(3):
+        with cols2[i]:
+            idx = i + 4
+            df_w = all_wt_hourly[all_wt_hourly['Wochentag'] == idx]
+            if not df_w.empty:
+                fig = px.line(df_w, x='Stunde', y='Anzahl', markers=True, title=wt_names[idx])
+                fig.update_layout(height=200, margin=dict(l=20, r=20, t=30, b=20))
+                st.plotly_chart(fig, use_container_width=True)
     
-    for idx, col in wochentag_cols_row2:
-        with col:
-            wt_data = filtered[filtered['Wochentag'] == idx]
-            if not wt_data.empty:
-                hourly_wt_avg = wt_data.groupby('Stunde')['Anzahl'].mean().reset_index()
-                hourly_wt_avg['Anzahl_fmt'] = hourly_wt_avg['Anzahl'].apply(lambda x: format_number_ch(x))
-                fig_wt = px.line(hourly_wt_avg, x='Stunde', y='Anzahl', markers=True,
-                                 color_discrete_sequence=['#2c3e50'], custom_data=['Anzahl_fmt'])
-                fig_wt.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
-                fig_wt.update_layout(
-                    title=dict(text=wochentag_namen_full[idx], font=dict(size=14)),
-                    xaxis=dict(tickmode='linear', tick0=0, dtick=4, title=''),
-                    yaxis=dict(title='Ø Fz/h'), height=250,
-                    margin=dict(l=40, r=20, t=40, b=30), hovermode='x unified'
-                )
-                st.plotly_chart(fig_wt, use_container_width=True)
-            else:
-                st.info(f"Keine Daten für {wochentag_namen_full[idx]}")
+    with cols2[3]:
+        # Comparison
+        all_wt_hourly['WtName'] = all_wt_hourly['Wochentag'].map(lambda x: wt_names[x][:2])
+        fig_comp = px.line(all_wt_hourly, x='Stunde', y='Anzahl', color='WtName', title='Vergleich')
+        fig_comp.update_layout(height=200, margin=dict(l=20, r=20, t=30, b=20), showlegend=True)
+        st.plotly_chart(fig_comp, use_container_width=True)
+        
+    # === FAHRZEUGKLASSEN & RICHTUNG ===
+    st.markdown("---")
+    c_l, c_r = st.columns(2)
     
-    # Vergleichsdiagramm
-    with col_empty:
-        st.markdown("**Vergleich**")
-        hourly_all_wt_avg = filtered.groupby(['Wochentag', 'Stunde'])['Anzahl'].mean().reset_index()
-        hourly_all_wt_avg['Wochentag_Name'] = hourly_all_wt_avg['Wochentag'].map(
-            {i: d for i, d in enumerate(['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'])}
-        )
-        hourly_all_wt_avg['Anzahl_fmt'] = hourly_all_wt_avg['Anzahl'].apply(lambda x: format_number_ch(x))
-        fig_compare = px.line(
-            hourly_all_wt_avg, x='Stunde', y='Anzahl', color='Wochentag_Name',
-            category_orders={'Wochentag_Name': ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']},
-            custom_data=['Anzahl_fmt', 'Wochentag_Name']
-        )
-        fig_compare.update_traces(hovertemplate='%{customdata[1]}: %{customdata[0]}<extra></extra>')
-        fig_compare.update_layout(
-            title=dict(text='Alle Wochentage', font=dict(size=14)),
-            xaxis=dict(tickmode='linear', tick0=0, dtick=4, title=''),
-            yaxis=dict(title='Ø Fz/h'), height=250,
-            margin=dict(l=40, r=20, t=40, b=30), hovermode='x unified',
-            legend=dict(font=dict(size=9), orientation='h', yanchor='bottom', y=-0.4, xanchor='center', x=0.5)
-        )
-        st.plotly_chart(fig_compare, use_container_width=True)
-    
-    # Zeile 2: Fahrzeugklassen und Richtungen
-    col_left2, col_right2 = st.columns(2)
-    
-    with col_left2:
+    with c_l:
         st.subheader("Fahrzeugklassen (%)")
-        tab_detail, tab_kategorie = st.tabs(["Detailliert", "Kategorien"])
+        tab1, tab2 = st.tabs(["Detailliert", "Kategorien"])
         
-        with tab_detail:
-            by_class = filtered.groupby('Klasse.Text')['Anzahl'].sum().reset_index()
-            total = by_class['Anzahl'].sum()
-            by_class['Prozent'] = (by_class['Anzahl'] / total * 100).round(1)
-            by_class = by_class.sort_values('Prozent', ascending=True)
-            by_class['Prozent_fmt'] = by_class['Prozent'].apply(lambda x: f"{x:.1f}%")
-            by_class['Anzahl_fmt'] = by_class['Anzahl'].apply(lambda x: format_number_ch(x))
-            fig_classes = px.bar(
-                by_class, x='Prozent', y='Klasse.Text', orientation='h',
-                labels={'Klasse.Text': '', 'Prozent': 'Anteil (%)'},
-                color='Klasse.Text', color_discrete_map=FARBEN, text='Prozent',
-                custom_data=['Prozent_fmt', 'Anzahl_fmt']
-            )
-            fig_classes.update_traces(texttemplate='%{text:.1f}%', textposition='outside',
-                                       hovertemplate='%{y}: %{customdata[0]} (%{customdata[1]} Fz.)<extra></extra>')
-            fig_classes.update_layout(showlegend=False, xaxis=dict(range=[0, 100]))
-            st.plotly_chart(fig_classes, use_container_width=True)
-        
-        with tab_kategorie:
-            kategorie_farben = {
-                'Personenwagen': '#3498db', 'Lieferwagen': '#2ecc71', 'Motorrad': '#e74c3c',
-                'Lastwagen': '#9b59b6', 'Bus/Trolleybus': '#f39c12', 'Unbekannt': '#95a5a6'
-            }
-            by_kategorie = filtered.groupby('Kategorie')['Anzahl'].sum().reset_index()
-            total_kat = by_kategorie['Anzahl'].sum()
-            by_kategorie['Prozent'] = (by_kategorie['Anzahl'] / total_kat * 100).round(1)
-            by_kategorie = by_kategorie.sort_values('Prozent', ascending=True)
-            by_kategorie['Prozent_fmt'] = by_kategorie['Prozent'].apply(lambda x: f"{x:.1f}%")
-            by_kategorie['Anzahl_fmt'] = by_kategorie['Anzahl'].apply(lambda x: format_number_ch(x))
-            fig_kategorien = px.bar(
-                by_kategorie, x='Prozent', y='Kategorie', orientation='h',
-                labels={'Kategorie': '', 'Prozent': 'Anteil (%)'},
-                color='Kategorie', color_discrete_map=kategorie_farben, text='Prozent',
-                custom_data=['Prozent_fmt', 'Anzahl_fmt']
-            )
-            fig_kategorien.update_traces(texttemplate='%{text:.1f}%', textposition='outside',
-                                          hovertemplate='%{y}: %{customdata[0]} (%{customdata[1]} Fz.)<extra></extra>')
-            fig_kategorien.update_layout(showlegend=False, xaxis=dict(range=[0, 100]))
-            st.plotly_chart(fig_kategorien, use_container_width=True)
-    
-    with col_right2:
+        with tab1:
+            classes = con.execute(f"""
+                SELECT "Klasse.Text", SUM(Anzahl) as Anzahl 
+                FROM traffic 
+                WHERE {final_where}
+                GROUP BY 1 ORDER BY 2 ASC
+            """).df()
+            total = classes['Anzahl'].sum()
+            classes['Prozent'] = (classes['Anzahl'] / total * 100).round(1)
+            
+            fig_c = px.bar(classes, x='Prozent', y='Klasse.Text', orientation='h', text='Prozent',
+                           color='Klasse.Text', color_discrete_map=FARBEN)
+            fig_c.update_traces(texttemplate='%{text:.1f}%')
+            fig_c.update_layout(showlegend=False)
+            st.plotly_chart(fig_c, use_container_width=True)
+            
+        with tab2:
+            cats = con.execute(f"""
+                SELECT Kategorie, SUM(Anzahl) as Anzahl 
+                FROM traffic 
+                WHERE {final_where}
+                GROUP BY 1 ORDER BY 2 ASC
+            """).df()
+            total_c = cats['Anzahl'].sum()
+            cats['Prozent'] = (cats['Anzahl'] / total_c * 100).round(1)
+            
+            fig_k = px.bar(cats, x='Prozent', y='Kategorie', orientation='h', text='Prozent',
+                           color='Kategorie', color_discrete_map=FARBEN)
+            fig_k.update_traces(texttemplate='%{text:.1f}%')
+            fig_k.update_layout(showlegend=False)
+            st.plotly_chart(fig_k, use_container_width=True)
+            
+    with c_r:
         st.subheader("↔️ Richtungsvergleich")
-        by_direction = filtered.groupby('Richtung')['Anzahl'].sum().reset_index()
-        by_direction['Anzahl_fmt'] = by_direction['Anzahl'].apply(lambda x: format_number_ch(x))
-        by_direction['Prozent'] = (by_direction['Anzahl'] / by_direction['Anzahl'].sum() * 100).round(1)
-        fig_direction = px.pie(
-            by_direction, values='Anzahl', names='Richtung', hole=0.4,
-            color_discrete_sequence=['#3498db', '#e74c3c'],
-            custom_data=['Anzahl_fmt', 'Prozent']
-        )
-        fig_direction.update_traces(textposition='inside', textinfo='percent+label',
-                                     hovertemplate='%{label}: %{customdata[0]} (%{customdata[1]:.1f}%)<extra></extra>')
-        st.plotly_chart(fig_direction, use_container_width=True)
-    
-    # Zeile 2b: Fahrzeugkategorien im Zeitverlauf
+        dirs = con.execute(f"""
+            SELECT Richtung, SUM(Anzahl) as Anzahl 
+            FROM traffic 
+            WHERE {final_where}
+            GROUP BY 1 ORDER BY 2 DESC
+        """).df()
+        fig_p = px.pie(dirs, values='Anzahl', names='Richtung', hole=0.4, 
+                       color='Richtung', color_discrete_map={'Bucheggplatz': '#3498db', 'Hardbrücke': '#e74c3c'})
+        st.plotly_chart(fig_p, use_container_width=True)
+
+    # 3. Kategorien Verlauf (Nur anzeigen wenn mehrere Jahre ausgewählt sind)
     if len(selected_jahre) > 1:
         st.markdown("---")
-        st.subheader("Fahrzeugkategorien im Jahresverlauf (%)")
+        st.subheader("Entwicklung der Fahrzeugkategorien")
         
-        kategorie_farben_verlauf = {
-            'Personenwagen': '#3498db', 'Lieferwagen': '#2ecc71', 'Motorrad': '#e74c3c',
-            'Lastwagen': '#9b59b6', 'Bus/Trolleybus': '#f39c12', 'Unbekannt': '#95a5a6'
-        }
+        # DuckDB Pivot-like aggregation using creating list/struct not standard SQL
+        # Standard SQL approach: Group by Year, Category
         
-        yearly_by_cat = filtered.groupby(['Jahr', 'Kategorie'])['Anzahl'].sum().reset_index()
-        yearly_totals = yearly_by_cat.groupby('Jahr')['Anzahl'].sum().reset_index()
-        yearly_totals.columns = ['Jahr', 'Total']
-        yearly_by_cat = yearly_by_cat.merge(yearly_totals, on='Jahr')
-        yearly_by_cat['Prozent'] = (yearly_by_cat['Anzahl'] / yearly_by_cat['Total'] * 100).round(2)
-        yearly_by_cat['Prozent_fmt'] = yearly_by_cat['Prozent'].apply(lambda x: f"{x:.1f}%")
-        yearly_by_cat['Anzahl_fmt'] = yearly_by_cat['Anzahl'].apply(lambda x: format_number_ch(x))
-        
-        cat_order = yearly_by_cat.groupby('Kategorie')['Prozent'].mean().sort_values(ascending=False).index.tolist()
-        
-        fig_cat_trend = make_subplots(specs=[[{"secondary_y": True}]])
-        
-        for kategorie in cat_order:
-            df_kat = yearly_by_cat[yearly_by_cat['Kategorie'] == kategorie]
-            is_pw = kategorie == 'Personenwagen'
-            fig_cat_trend.add_trace(
-                go.Scatter(
-                    x=df_kat['Jahr'], y=df_kat['Prozent'], name=kategorie,
-                    mode='lines+markers',
-                    line=dict(color=kategorie_farben_verlauf.get(kategorie, '#666'), width=3 if is_pw else 2),
-                    marker=dict(size=10 if is_pw else 6),
-                    customdata=df_kat[['Prozent_fmt', 'Anzahl_fmt', 'Kategorie']].values,
-                    hovertemplate='%{customdata[2]}: %{customdata[0]} (%{customdata[1]} Fz.)<extra></extra>'
-                ),
-                secondary_y=is_pw
+        # Qualify columns in WHERE clause to avoid ambiguity in JOINs
+        final_where_qualified = final_where.replace("Jahr", "t.Jahr").replace("Richtung", "t.Richtung").replace('"Klasse.Text"', 't."Klasse.Text"').replace("Wochentag", "t.Wochentag")
+
+        cat_trend = con.execute(f"""
+            WITH year_totals AS (
+                SELECT Jahr, SUM(Anzahl) as YearTotal
+                FROM traffic
+                WHERE {final_where}
+                GROUP BY 1
             )
+            SELECT 
+                t.Jahr, 
+                t.Kategorie, 
+                SUM(t.Anzahl) as CatSum,
+                (SUM(t.Anzahl) / ANY_VALUE(y.YearTotal) * 100) as Prozent
+            FROM traffic t
+            JOIN year_totals y ON t.Jahr = y.Jahr
+            WHERE {final_where_qualified}
+            GROUP BY 1, 2
+            ORDER BY 1
+        """).df()
         
-        fig_cat_trend.update_layout(xaxis=dict(tickmode='linear', dtick=1), hovermode='x unified',
-                                     legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0))
-        fig_cat_trend.update_yaxes(title_text="Anteil andere Kategorien (%)", secondary_y=False, range=[0, 15])
-        fig_cat_trend.update_yaxes(title_text="Anteil Personenwagen (%)", secondary_y=True, range=[80, 95])
+        tab_area, tab_line = st.tabs(["Flächendiagramm", "Liniendiagramm"])
         
-        fig_cat_area = px.area(
-            yearly_by_cat, x='Jahr', y='Prozent', color='Kategorie',
-            labels={'Jahr': '', 'Prozent': 'Anteil (%)', 'Kategorie': 'Kategorie'},
-            color_discrete_map=kategorie_farben_verlauf, category_orders={'Kategorie': cat_order},
-            custom_data=['Prozent_fmt', 'Kategorie']
-        )
-        fig_cat_area.update_traces(hovertemplate='%{customdata[1]}: %{customdata[0]}<extra></extra>')
-        fig_cat_area.update_layout(xaxis=dict(tickmode='linear', dtick=1), yaxis=dict(range=[0, 100]),
-                                    hovermode='x unified',
-                                    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0))
-        
-        tab_line, tab_area = st.tabs(["Liniendiagramm", "Flächendiagramm"])
-        with tab_line:
-            st.plotly_chart(fig_cat_trend, use_container_width=True, key="cat_line")
         with tab_area:
-            st.plotly_chart(fig_cat_area, use_container_width=True, key="cat_area")
+            fig_cat = px.area(cat_trend, x='Jahr', y='Prozent', color='Kategorie', 
+                              color_discrete_map=FARBEN)
+            st.plotly_chart(fig_cat, use_container_width=True)
+            
+        with tab_line:
+            fig_cat_line = px.line(cat_trend, x='Jahr', y='Prozent', color='Kategorie', markers=True,
+                                   color_discrete_map=FARBEN)
+            st.plotly_chart(fig_cat_line, use_container_width=True)
     
-    # Zeile 3: Monatstrend
+    # 4. Monatlicher Verkehrstrend
     st.markdown("---")
     st.subheader("Monatlicher Verkehrstrend (Ø Tagesverkehr)")
     
-    import calendar
-    daily_totals_monthly = filtered.groupby(['Jahr', 'Monat', 'Datum_Tag', 'Richtung'])['Anzahl'].sum().reset_index()
-    monthly_stats = daily_totals_monthly.groupby(['Jahr', 'Monat', 'Richtung']).agg(
-        Anzahl=('Anzahl', 'mean'), Tage=('Datum_Tag', 'nunique')
-    ).reset_index()
-    monthly_stats['Erwartete_Tage'] = monthly_stats.apply(
-        lambda row: calendar.monthrange(int(row['Jahr']), int(row['Monat']))[1], axis=1
-    )
-    monthly_stats['Abdeckung'] = monthly_stats['Tage'] / monthly_stats['Erwartete_Tage']
+    # Check current year/month for filtering rules
+    now = datetime.now()
+    curr_y, curr_m = now.year, now.month
     
-    # Filter: Monate mit mindestens 50% Abdeckung anzeigen (weniger strikt für aktuelles Jahr)
-    # Für abgeschlossene Monate: mindestens 70% Abdeckung
-    # Für den laufenden Monat: mindestens 3 Tage Daten
-    current_year = datetime.now().year
-    current_month = datetime.now().month
-    is_current_month = (monthly_stats['Jahr'] == current_year) & (monthly_stats['Monat'] == current_month)
-    monthly = monthly_stats[
-        (monthly_stats['Abdeckung'] >= 0.7) | 
-        (is_current_month & (monthly_stats['Tage'] >= 3))
-    ].copy()
+    # Filter only fully measured days (>= 22h per direction)
+    monthly_trend = con.execute(f"""
+        WITH daily_agg AS (
+            SELECT t.Jahr, t.Monat, t.Datum_Tag_Str, t.Richtung, SUM(t.Anzahl) as DaySum
+            FROM traffic t
+            WHERE {final_where}
+            AND t.Datum_Tag_Str IN (SELECT Datum_Tag_Str FROM valid_days)
+            GROUP BY 1, 2, 3, 4
+        )
+        SELECT 
+            Jahr, Monat, Richtung,
+            AVG(DaySum) as Anzahl,
+            COUNT(DISTINCT Datum_Tag_Str) as Tage,
+            (
+                (Jahr < {curr_y} AND COUNT(DISTINCT Datum_Tag_Str) >= 20) OR 
+                (Jahr = {curr_y} AND Monat < {curr_m} AND COUNT(DISTINCT Datum_Tag_Str) >= 20) OR
+                (Jahr = {curr_y} AND Monat = {curr_m} AND COUNT(DISTINCT Datum_Tag_Str) >= 3)
+            ) as pass_filter
+        FROM daily_agg
+        GROUP BY 1, 2, 3
+    """).df()
     
-    if monthly.empty:
-        st.info("ℹ️ Keine Monate mit ausreichender Datenabdeckung verfügbar.")
-    else:
-        monthly['Datum'] = pd.to_datetime(monthly['Jahr'].astype(str) + '-' + monthly['Monat'].astype(str) + '-15')
-        monthly['Anzahl_fmt'] = monthly['Anzahl'].apply(lambda x: format_number_ch(x))
+    # Filter valid months
+    monthly_valid = monthly_trend[monthly_trend['pass_filter']].copy()
+    if not monthly_valid.empty:
+        # Create a dummy date for plotting
+        monthly_valid['Datum'] = pd.to_datetime(
+            monthly_valid['Jahr'].astype(str) + '-' + monthly_valid['Monat'].astype(str) + '-15'
+        )
         
         fig_trend = px.bar(
-            monthly, x='Datum', y='Anzahl', color='Richtung', barmode='group',
-            labels={'Datum': '', 'Anzahl': 'Ø Fahrzeuge/Tag', 'Richtung': 'Richtung'},
-            color_discrete_sequence=['#3498db', '#e74c3c'], custom_data=['Anzahl_fmt']
+            monthly_valid, x='Datum', y='Anzahl', color='Richtung', barmode='group',
+            color_discrete_map={'Bucheggplatz': '#3498db', 'Hardbrücke': '#e74c3c'}
         )
-        fig_trend.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
         
-        shapes, annotations = [], []
-        jahre_im_datensatz = monthly['Jahr'].unique()
-        
-        # X-Achse: Von Januar bis Dezember für alle ausgewählten Jahre
-        min_jahr = min(selected_jahre)
-        max_jahr = max(selected_jahre)
-        x_range_start = f"{min_jahr}-01-01"
-        x_range_end = f"{max_jahr}-12-31"
-        
-        if 2020 in jahre_im_datensatz:
+        # Add background shapes for context
+        shapes = []
+        # Lockdown 2020
+        if 2020 in selected_jahre:
             shapes.append(dict(type="rect", xref="x", yref="paper", x0="2020-03-01", x1="2020-06-01",
                                y0=0, y1=1, fillcolor="rgba(255, 0, 0, 0.1)", line=dict(width=0), layer="below"))
-            annotations.append(dict(x="2020-04-15", y=1.02, xref="x", yref="paper", text="Lockdown",
-                                    showarrow=False, font=dict(size=10, color="#e74c3c"), bgcolor="rgba(255,255,255,0.8)"))
         
-        for jahr in jahre_im_datensatz:
-            shapes.append(dict(type="rect", xref="x", yref="paper", x0=f"{jahr}-07-01", x1=f"{jahr}-09-01",
+        # Summer Holidays (approx July-Aug)
+        for y in selected_jahre:
+            shapes.append(dict(type="rect", xref="x", yref="paper", x0=f"{y}-07-01", x1=f"{y}-09-01",
                                y0=0, y1=1, fillcolor="rgba(255, 193, 7, 0.1)", line=dict(width=0), layer="below"))
-        
-        if len(jahre_im_datensatz) > 0:
-            first_year = min(jahre_im_datensatz)
-            annotations.append(dict(x=f"{first_year}-08-01", y=1.02, xref="x", yref="paper", text="Sommerferien",
-                                    showarrow=False, font=dict(size=10, color="#f39c12"), bgcolor="rgba(255,255,255,0.8)"))
-        
-        for jahr in sorted(jahre_im_datensatz)[1:]:
-            shapes.append(dict(type="line", xref="x", yref="paper", x0=f"{jahr}-01-01", x1=f"{jahr}-01-01",
-                               y0=0, y1=1, line=dict(color="rgba(0,0,0,0.3)", width=1, dash="dash")))
-        
+            
+            # Annual separator line (dashed)
+            shapes.append(dict(type="line", xref="x", yref="paper", x0=f"{y}-01-01", x1=f"{y}-01-01",
+                               y0=0, y1=1, line=dict(color="rgba(0,0,0,0.3)", width=1, dash="dash"), layer="below"))
+            
+        # Range festlegen: Beginn kleinstes Jahr bis Ende grösstes aktuelles Jahr
+        min_jahr = min(selected_jahre)
+        max_jahr = max(selected_jahre)
+        datum_range = [f"{min_jahr}-01-01", f"{max_jahr}-12-31"]
+
         fig_trend.update_layout(
-            hovermode='x unified', 
-            bargap=0.1, 
             shapes=shapes, 
-            annotations=annotations, 
-            margin=dict(t=40),
             xaxis=dict(
-                range=[x_range_start, x_range_end],
-                dtick="M1",
-                tickformat="%b %Y"
+                dtick="M1", 
+                tickformat="%b %Y",
+                range=datum_range
             )
         )
         st.plotly_chart(fig_trend, use_container_width=True)
-        st.caption("Rot = COVID-19 Lockdown (März-Mai 2020) | Gelb = Sommerferien Zürich (Juli/August)")
-    
-    # Zeile 3b: Jahresverlauf (Wochenschnitt)
+    else:
+        st.info("Keine ausreichenden Daten für Monatstrend.")
+
+    # 5. Jahresverlauf (Wochenschnitt)
     st.markdown("---")
     st.subheader("Jahresverlauf (Wochendurchschnitt)")
     
-    daily_totals_weekly = filtered.groupby(['Jahr', 'Kalenderwoche', 'Datum_Tag'])['Anzahl'].sum().reset_index()
+    # Also apply the valid_days filter
+    weekly_trend = con.execute(f"""
+        WITH daily_agg AS (
+            SELECT t.Jahr, t.Kalenderwoche, t.Datum_Tag_Str, SUM(t.Anzahl) as DaySum
+            FROM traffic t
+            WHERE {final_where}
+            AND t.Datum_Tag_Str IN (SELECT Datum_Tag_Str FROM valid_days)
+            GROUP BY 1, 2, 3
+        )
+        SELECT Jahr, Kalenderwoche, AVG(DaySum) as Anzahl
+        FROM daily_agg
+        WHERE Kalenderwoche <= 52
+        GROUP BY 1, 2
+        HAVING COUNT(DISTINCT Datum_Tag_Str) >= 5
+        ORDER BY 1, 2
+    """).df()
     
-    kw53_data = daily_totals_weekly[daily_totals_weekly['Kalenderwoche'] == 53].copy()
-    if not kw53_data.empty:
-        kw53_data['Jahr'] = kw53_data['Jahr'] + 1
-        kw53_data['Kalenderwoche'] = 1
-        daily_totals_weekly = pd.concat([daily_totals_weekly, kw53_data], ignore_index=True)
+    weekly_trend['Jahr'] = weekly_trend['Jahr'].astype(str)
     
-    daily_totals_weekly = daily_totals_weekly[daily_totals_weekly['Kalenderwoche'] <= 52]
-    
-    weekly_stats_kw = daily_totals_weekly.groupby(['Jahr', 'Kalenderwoche']).agg(
-        Anzahl=('Anzahl', 'mean'), Tage=('Datum_Tag', 'nunique')
-    ).reset_index()
-    weekly_stats_kw.loc[weekly_stats_kw['Tage'] < 5, 'Anzahl'] = np.nan
-    weekly_stats_kw.loc[(weekly_stats_kw['Jahr'] == 2020) & (weekly_stats_kw['Kalenderwoche'] < 4), 'Anzahl'] = np.nan
-    
-    weekly_avg = weekly_stats_kw[['Jahr', 'Kalenderwoche', 'Anzahl']].copy()
-    weekly_avg['Anzahl_fmt'] = weekly_avg['Anzahl'].apply(lambda x: format_number_ch(x) if pd.notna(x) else '–')
-    weekly_avg['Jahr'] = weekly_avg['Jahr'].astype(str)
-    
-    fig_weekly = px.line(
-        weekly_avg, x='Kalenderwoche', y='Anzahl', color='Jahr',
-        labels={'Kalenderwoche': 'Kalenderwoche', 'Anzahl': 'Ø Fahrzeuge/Tag', 'Jahr': 'Jahr'},
-        markers=True, custom_data=['Anzahl_fmt', 'Jahr']
-    )
-    fig_weekly.update_traces(hovertemplate='KW %{x}: %{customdata[0]}<extra>%{customdata[1]}</extra>', connectgaps=False)
-    
-    weekly_shapes = []
-    weekly_annotations = []
-    
-    if '2020' in weekly_avg['Jahr'].values:
-        weekly_shapes.append(dict(type="rect", xref="x", yref="paper", x0=11, x1=20,
+    if not weekly_trend.empty:
+        fig_wk = px.line(weekly_trend, x='Kalenderwoche', y='Anzahl', color='Jahr', markers=True)
+        
+        # Add shapes for context
+        wk_shapes = []
+        wk_annotations = []
+        
+        # Lockdown approx KW11-KW20 (Red)
+        if '2020' in weekly_trend['Jahr'].values:
+            wk_shapes.append(dict(type="rect", xref="x", yref="paper", x0=11, x1=20,
                                   y0=0, y1=1, fillcolor="rgba(255, 0, 0, 0.1)", line=dict(width=0), layer="below"))
-        weekly_annotations.append(dict(x=15, y=1.02, xref="x", yref="paper", text="Lockdown",
-                                       showarrow=False, font=dict(size=10, color="#e74c3c"), bgcolor="rgba(255,255,255,0.8)"))
-    
-    weekly_shapes.append(dict(type="rect", xref="x", yref="paper", x0=28, x1=33,
+            wk_annotations.append(dict(x=15, y=1.02, xref="x", yref="paper", text="Lockdown",
+                                    showarrow=False, font=dict(size=10, color="#e74c3c"), bgcolor="rgba(255,255,255,0.8)"))
+        
+        # Summer approx KW28-33 (Yellow)
+        wk_shapes.append(dict(type="rect", xref="x", yref="paper", x0=28, x1=33,
                               y0=0, y1=1, fillcolor="rgba(255, 193, 7, 0.1)", line=dict(width=0), layer="below"))
-    weekly_annotations.append(dict(x=30.5, y=1.02, xref="x", yref="paper", text="Ferien",
+        wk_annotations.append(dict(x=30.5, y=1.02, xref="x", yref="paper", text="Ferien",
                                    showarrow=False, font=dict(size=10, color="#f39c12"), bgcolor="rgba(255,255,255,0.8)"))
-    
-    weekly_shapes.extend([
-        dict(type="rect", xref="x", yref="paper", x0=51, x1=52.5, y0=0, y1=1,
-             fillcolor="rgba(76, 175, 80, 0.1)", line=dict(width=0), layer="below"),
-        dict(type="rect", xref="x", yref="paper", x0=0.5, x1=2, y0=0, y1=1,
-             fillcolor="rgba(76, 175, 80, 0.1)", line=dict(width=0), layer="below")
-    ])
-    weekly_annotations.append(dict(x=52, y=1.02, xref="x", yref="paper", text="",
-                                   showarrow=False, font=dict(size=10), bgcolor="rgba(255,255,255,0.8)"))
-    
-    fig_weekly.update_layout(xaxis=dict(tickmode='linear', tick0=1, dtick=4, range=[0.5, 52.5]),
-                              hovermode='x unified', shapes=weekly_shapes, annotations=weekly_annotations, margin=dict(t=40))
-    st.plotly_chart(fig_weekly, use_container_width=True)
-    st.caption("Rot = COVID-19 Lockdown (KW 12-20, 2020) | Gelb = Sommerferien (KW 28-33) |  Grün = Weihnachten/Neujahr")
-    
-    # Zeile 4: Heatmap
+        
+        # Christmas / New Year (Green)
+        # Start of year (KW 0.5-2) and End of year (KW 51-52.5)
+        wk_shapes.extend([
+            dict(type="rect", xref="x", yref="paper", x0=51, x1=53, y0=0, y1=1,
+                 fillcolor="rgba(76, 175, 80, 0.1)", line=dict(width=0), layer="below"),
+            dict(type="rect", xref="x", yref="paper", x0=0, x1=2, y0=0, y1=1,
+                 fillcolor="rgba(76, 175, 80, 0.1)", line=dict(width=0), layer="below")
+        ])
+
+        fig_wk.update_layout(
+            shapes=wk_shapes, 
+            annotations=wk_annotations,
+            xaxis=dict(range=[0, 53], dtick=5)
+        )
+        st.plotly_chart(fig_wk, use_container_width=True)
+        st.caption("Rot = COVID-19 Lockdown (KW 12-20, 2020) | Gelb = Sommerferien (KW 28-33) | Grün = Weihnachten/Neujahr")
+
+    # 6. Heatmap
     st.markdown("---")
     st.subheader("🗓️ Verkehrsmuster: Stunde × Wochentag")
     
-    wochentag_labels = {0: 'Mo', 1: 'Di', 2: 'Mi', 3: 'Do', 4: 'Fr', 5: 'Sa', 6: 'So'}
-    heatmap_data = filtered.groupby(['Wochentag', 'Stunde'])['Anzahl'].mean().reset_index()
+    heatmap_df = con.execute(f"""
+        SELECT Wochentag, Stunde, AVG(Anzahl) as Anzahl
+        FROM traffic
+        WHERE {final_where}
+        GROUP BY 1, 2
+    """).df()
     
-    daily_totals_wt = filtered.groupby(['Datum_Tag', 'Wochentag'])['Anzahl'].sum().reset_index()
-    avg_daily_by_wt = daily_totals_wt.groupby('Wochentag')['Anzahl'].mean().round(0).astype(int)
-    wochentag_labels_mit_summe = {
-        i: f"{wochentag_labels[i]} (Ø {avg_daily_by_wt.get(i, 0):,}/Tag)".replace(',', "'") for i in range(7)
-    }
-    
-    all_combinations = pd.MultiIndex.from_product([range(7), range(24)], names=['Wochentag', 'Stunde']).to_frame(index=False)
-    heatmap_complete = all_combinations.merge(heatmap_data, on=['Wochentag', 'Stunde'], how='left')
-    heatmap_complete['Anzahl'] = heatmap_complete['Anzahl'].fillna(0)
-    heatmap_pivot = heatmap_complete.pivot(index='Wochentag', columns='Stunde', values='Anzahl')
-    heatmap_pivot.index = [wochentag_labels_mit_summe[i] for i in heatmap_pivot.index]
-    heatmap_hover = heatmap_pivot.map(lambda x: f"Ø {format_number_ch(x)} Fz./h")
-    
-    fig_heatmap = px.imshow(
-        heatmap_pivot, labels=dict(x="Stunde", y="Wochentag", color="Ø Fahrzeuge/h"),
-        aspect="auto", color_continuous_scale="YlOrRd"
-    )
-    fig_heatmap.update_traces(hovertemplate='%{y}<br>%{x}:00 Uhr<br>%{customdata}<extra></extra>',
-                               customdata=heatmap_hover.values)
-    fig_heatmap.update_layout(height=350)
-    st.plotly_chart(fig_heatmap, use_container_width=True)
-    
-    # Zeile 5: Jahresvergleich (auch bei einem Jahr)
+    if not heatmap_df.empty:
+        # Full grid to ensure all cells exist
+        idx = pd.MultiIndex.from_product([range(7), range(24)], names=['Wochentag', 'Stunde'])
+        heatmap_full = heatmap_df.set_index(['Wochentag', 'Stunde']).reindex(idx, fill_value=0).reset_index()
+        
+        # Pivot for plotting
+        pivot = heatmap_full.pivot(index='Wochentag', columns='Stunde', values='Anzahl')
+        pivot.index = [wt_map[i] for i in pivot.index]
+        
+        fig_heat = px.imshow(pivot, labels=dict(x="Stunde", y="Wochentag", color="Ø Fz/h"),
+                             aspect="auto", color_continuous_scale="YlOrRd")
+        st.plotly_chart(fig_heat, use_container_width=True)
+
+    # 7. Jahresvergleich (DTV) mit Validierung
     st.markdown("---")
     st.subheader("Jahresvergleich (Ø Tagesverkehr)")
+
+    # Analyze Gaps / Completeness per Year
+    # We use the full dataset (filtered by year only) to determine availability
+    quality_stats = con.execute(f"""
+        WITH range_stats AS (
+            SELECT 
+                Jahr,
+                MIN(Datum_Obs) as MinDate,
+                MAX(Datum_Obs) as MaxDate,
+                COUNT(DISTINCT Datum_Obs) as ActualHours
+            FROM traffic
+            WHERE Jahr IN ({years_str})
+            GROUP BY Jahr
+        )
+        SELECT 
+            Jahr,
+            ActualHours,
+            date_diff('hour', MinDate, MaxDate) + 1 as TotalHoursSpan,
+            (date_diff('hour', MinDate, MaxDate) + 1) - ActualHours as MissingHours
+        FROM range_stats
+        ORDER BY Jahr
+    """).df()
     
-    gap_analysis = analyze_data_gaps(data)
+    # Calculate Metrics and Display
+    yearly_completeness = []
     
-    daily_by_year_total = filtered.groupby(['Jahr', 'Datum_Tag'])['Anzahl'].sum().reset_index()
-    yearly_total = daily_by_year_total.groupby('Jahr')['Anzahl'].mean().reset_index()
-    
-    yearly_corrected = []
-    for _, row in yearly_total.iterrows():
-        jahr = row['Jahr']
-        avg_dtv = row['Anzahl']
-        days_with_data = daily_by_year_total[daily_by_year_total['Jahr'] == jahr]['Datum_Tag'].nunique()
-        year_stat = next((s for s in gap_analysis['yearly_stats'] if s['jahr'] == jahr), None)
-        gap_days = year_stat['gap_days'] if year_stat else 0
-        vollst = year_stat['completeness'] if year_stat else 100
-        yearly_corrected.append({
-            'Jahr': jahr, 'DTV': avg_dtv, 'Tage_Daten': days_with_data,
-            'Tage_Lücken': gap_days, 'Vollständigkeit': vollst
-        })
-    
-    cols_yearly = st.columns(len(selected_jahre))
-    for i, jahr in enumerate(sorted(selected_jahre)):
-        with cols_yearly[i]:
-            corr_data = next((c for c in yearly_corrected if c['Jahr'] == jahr), None)
-            if corr_data:
-                formatted_val = format_number(corr_data['DTV'])
-                gap_days = corr_data['Tage_Lücken']
-                vollst = corr_data['Vollständigkeit']
+    if not quality_stats.empty:
+        cols_yearly = st.columns(len(quality_stats))
+        for i, row in quality_stats.iterrows():
+            jahr = int(row['Jahr'])
+            missing = row['MissingHours']
+            total = row['TotalHoursSpan']
+            completeness = (1 - (missing / total)) * 100 if total > 0 else 0
+            gap_days = missing / 24.0
+            
+            # Save for later use
+            yearly_completeness.append({
+                'Jahr': jahr, 
+                'Completeness': completeness, 
+                'GapDays': gap_days
+            })
+
+            # Get DTV for Display Label
+            # Warning: Taking simple average of daily sums for the metric label to match original roughly
+            dtv_val = con.execute(f"""
+                SELECT AVG(DaySum) 
+                FROM (SELECT Datum_Tag_Str, SUM(Anzahl) as DaySum FROM traffic WHERE Jahr = {jahr} GROUP BY 1)
+            """).fetchone()[0]
+            
+            with cols_yearly[i]:
+                formatted_val = format_number(dtv_val) if dtv_val else "-"
                 if gap_days > 1:
                     st.metric(label=f"{jahr}", value=formatted_val,
-                              help=f"Ø Fahrzeuge/Tag | Vollständigkeit: {vollst:.1f}% | {gap_days:.0f} Tage fehlen")
-                    st.caption(f"⚠️ {gap_days:.0f} Tage fehlen")
+                              help=f"Ø Fahrzeuge/Tag | Vollständigkeit: {completeness:.1f}% | {gap_days:.1f} Tage fehlen")
+                    st.caption(f"⚠️ {gap_days:.1f} Tage fehlen")
                 else:
                     st.metric(label=f"{jahr}", value=formatted_val,
-                              help=f"Ø Fahrzeuge/Tag | Vollständigkeit: {vollst:.1f}%")
+                              help=f"Ø Fahrzeuge/Tag | Vollständigkeit: {completeness:.1f}%")
     
-    years_with_gaps = [c for c in yearly_corrected if c['Tage_Lücken'] > 7]
-    if years_with_gaps:
+    # Check for big gaps
+    if any(x['GapDays'] > 7 for x in yearly_completeness):
         st.info("ℹ️ **Hinweis:** Einige Jahre haben grössere Datenlücken. "
                 "Der Ø Tagesverkehr (DTV) basiert nur auf den verfügbaren Tagen.")
+
+    # --- Valid Days Calculation ---
+    # We use the pre-calculated 'valid_days' table which enforces:
+    # 1. >= 22 hours of data per direction
+    # 2. Both directions must be valid on the same day
     
-    # Für Min/Max: Nur Tage mit mindestens 90% Datenverfügbarkeit PRO RICHTUNG verwenden
-    # Wichtig: Stundenzählung auf Basis der UNGEFILTERTEN Daten (data statt filtered), 
-    # damit bei Filterung auf Fahrzeugklassen trotzdem die Datenverfügbarkeit korrekt ermittelt wird
-    # Die Verfügbarkeit muss PRO RICHTUNG geprüft werden, da eine Richtung ausfallen kann
-    hours_per_day_direction = data.groupby(['Jahr', 'Datum_Tag', 'Richtung'])['Stunde'].nunique().reset_index(name='Stunden')
-    # Mindestens 22 Stunden (90% Verfügbarkeit von 24h) pro Richtung
-    complete_days_list = hours_per_day_direction[hours_per_day_direction['Stunden'] >= 22][['Jahr', 'Datum_Tag', 'Richtung']]
+    # Tab Layout
+    tab1, tab2, tab_total = st.tabs(["Gesamtverkehr", "Nach Richtung", "Gesamtanzahl"])
     
-    # Tagessummen nur für vollständige Tage berechnen (verhindert Min=0 bei unvollständigen Tagen)
-    filtered_complete = filtered.merge(complete_days_list, on=['Jahr', 'Datum_Tag', 'Richtung'])
-    daily_by_year = filtered_complete.groupby(['Jahr', 'Datum_Tag', 'Richtung'])['Anzahl'].sum().reset_index()
-    
-    # Zusätzlicher Filter: Tage mit Anzahl=0 ausschliessen (können bei bestimmten Filterkonstellationen auftreten)
-    daily_by_year = daily_by_year[daily_by_year['Anzahl'] > 0]
-    
-    # Statistiken berechnen: Mean, Min, Max nur über vollständige Tage (inkl. Datum für Min/Max)
-    if not daily_by_year.empty:
-        # Aggregation für Mean, Min, Max
-        yearly_stats = daily_by_year.groupby(['Jahr', 'Richtung'])['Anzahl'].agg(['mean', 'min', 'max']).reset_index()
-        yearly_stats.columns = ['Jahr', 'Richtung', 'Anzahl', 'Min', 'Max']
-        
-        # Datum für Min und Max ermitteln
-        idx_min = daily_by_year.groupby(['Jahr', 'Richtung'])['Anzahl'].idxmin()
-        idx_max = daily_by_year.groupby(['Jahr', 'Richtung'])['Anzahl'].idxmax()
-        
-        min_dates = daily_by_year.loc[idx_min, ['Jahr', 'Richtung', 'Datum_Tag']].rename(columns={'Datum_Tag': 'Min_Datum'})
-        max_dates = daily_by_year.loc[idx_max, ['Jahr', 'Richtung', 'Datum_Tag']].rename(columns={'Datum_Tag': 'Max_Datum'})
-        
-        yearly = yearly_stats.merge(min_dates, on=['Jahr', 'Richtung']).merge(max_dates, on=['Jahr', 'Richtung'])
-        yearly['Min_Datum_fmt'] = yearly['Min_Datum'].apply(lambda x: x.strftime('%d.%m.%Y') if pd.notna(x) else '')
-        yearly['Max_Datum_fmt'] = yearly['Max_Datum'].apply(lambda x: x.strftime('%d.%m.%Y') if pd.notna(x) else '')
-    else:
-        # Fallback: wenn keine vollständigen Tage, berechne Mean über alle Tage
-        daily_by_year_all = filtered.groupby(['Jahr', 'Datum_Tag', 'Richtung'])['Anzahl'].sum().reset_index()
-        yearly = daily_by_year_all.groupby(['Jahr', 'Richtung'])['Anzahl'].mean().reset_index()
-        yearly.columns = ['Jahr', 'Richtung', 'Anzahl']
-        yearly['Min'] = yearly['Anzahl']
-        yearly['Max'] = yearly['Anzahl']
-        yearly['Min_Datum_fmt'] = ''
-        yearly['Max_Datum_fmt'] = ''
-    
-    yearly['Anzahl_fmt'] = yearly['Anzahl'].apply(lambda x: format_number_ch(x))
-    yearly['Min_fmt'] = yearly['Min'].apply(lambda x: format_number_ch(x))
-    yearly['Max_fmt'] = yearly['Max'].apply(lambda x: format_number_ch(x))
-    
-    # Gesamtverkehr (beide Richtungen) für zusätzliche Grafik
-    # Nur Tage verwenden, an denen BEIDE Richtungen vollständige Daten haben
-    complete_days_both = complete_days_list.groupby(['Jahr', 'Datum_Tag']).size().reset_index(name='Richtungen')
-    complete_days_both = complete_days_both[complete_days_both['Richtungen'] >= 2][['Jahr', 'Datum_Tag']]
-    
-    filtered_complete_gesamt = filtered.merge(complete_days_both, on=['Jahr', 'Datum_Tag'])
-    daily_by_year_gesamt = filtered_complete_gesamt.groupby(['Jahr', 'Datum_Tag'])['Anzahl'].sum().reset_index()
-    daily_by_year_gesamt = daily_by_year_gesamt[daily_by_year_gesamt['Anzahl'] > 0]
-    
-    if not daily_by_year_gesamt.empty:
-        yearly_gesamt_stats = daily_by_year_gesamt.groupby('Jahr')['Anzahl'].agg(['mean', 'min', 'max']).reset_index()
-        yearly_gesamt_stats.columns = ['Jahr', 'Anzahl', 'Min', 'Max']
-        
-        # Datum für Min und Max ermitteln
-        idx_min_gesamt = daily_by_year_gesamt.groupby('Jahr')['Anzahl'].idxmin()
-        idx_max_gesamt = daily_by_year_gesamt.groupby('Jahr')['Anzahl'].idxmax()
-        
-        min_dates_gesamt = daily_by_year_gesamt.loc[idx_min_gesamt, ['Jahr', 'Datum_Tag']].rename(columns={'Datum_Tag': 'Min_Datum'})
-        max_dates_gesamt = daily_by_year_gesamt.loc[idx_max_gesamt, ['Jahr', 'Datum_Tag']].rename(columns={'Datum_Tag': 'Max_Datum'})
-        
-        yearly_gesamt = yearly_gesamt_stats.merge(min_dates_gesamt, on='Jahr').merge(max_dates_gesamt, on='Jahr')
-        yearly_gesamt['Min_Datum_fmt'] = yearly_gesamt['Min_Datum'].apply(lambda x: x.strftime('%d.%m.%Y') if pd.notna(x) else '')
-        yearly_gesamt['Max_Datum_fmt'] = yearly_gesamt['Max_Datum'].apply(lambda x: x.strftime('%d.%m.%Y') if pd.notna(x) else '')
-    else:
-        # Fallback
-        daily_by_year_gesamt_all = filtered.groupby(['Jahr', 'Datum_Tag'])['Anzahl'].sum().reset_index()
-        yearly_gesamt = daily_by_year_gesamt_all.groupby('Jahr')['Anzahl'].mean().reset_index()
-        yearly_gesamt.columns = ['Jahr', 'Anzahl']
-        yearly_gesamt['Min'] = yearly_gesamt['Anzahl']
-        yearly_gesamt['Max'] = yearly_gesamt['Anzahl']
-        yearly_gesamt['Min_Datum_fmt'] = ''
-        yearly_gesamt['Max_Datum_fmt'] = ''
-    
-    yearly_gesamt['Anzahl_fmt'] = yearly_gesamt['Anzahl'].apply(lambda x: format_number_ch(x))
-    yearly_gesamt['Min_fmt'] = yearly_gesamt['Min'].apply(lambda x: format_number_ch(x))
-    yearly_gesamt['Max_fmt'] = yearly_gesamt['Max'].apply(lambda x: format_number_ch(x))
-    
-    tab_gesamt, tab_dtv, tab_total = st.tabs(["Gesamtverkehr", "Nach Richtung", "Gesamtanzahl"])
-    
-    with tab_gesamt:
-        # Grafik für Gesamtverkehr (beide Richtungen zusammen)
-        fig_yearly_gesamt = go.Figure()
-        
-        error_minus_gesamt = yearly_gesamt['Anzahl'] - yearly_gesamt['Min']
-        error_plus_gesamt = yearly_gesamt['Max'] - yearly_gesamt['Anzahl']
-        
-        fig_yearly_gesamt.add_trace(go.Bar(
-            x=yearly_gesamt['Jahr'],
-            y=yearly_gesamt['Anzahl'],
-            name='Gesamtverkehr',
-            marker_color='#85c1e9',  # Helleres Blau
-            text=yearly_gesamt['Anzahl_fmt'],
-            textposition='outside',
-            error_y=dict(
-                type='data',
-                symmetric=False,
-                array=error_plus_gesamt,
-                arrayminus=error_minus_gesamt,
-                color='#555',
-                thickness=1.5,
-                width=4
-            ),
-            customdata=np.column_stack([
-                yearly_gesamt['Anzahl_fmt'], 
-                yearly_gesamt['Min_fmt'], 
-                yearly_gesamt['Max_fmt'],
-                yearly_gesamt['Min_Datum_fmt'],
-                yearly_gesamt['Max_Datum_fmt']
-            ]),
-            hovertemplate='Ø: %{customdata[0]}<br>Min: %{customdata[1]} (%{customdata[3]})<br>Max: %{customdata[2]} (%{customdata[4]})<extra></extra>'
-        ))
-        
-        fig_yearly_gesamt.update_layout(
-            xaxis_title='',
-            yaxis_title='Ø Fahrzeuge/Tag (Gesamtverkehr)',
-            showlegend=False,
-            xaxis=dict(
-                tickmode='array',
-                tickvals=yearly_gesamt['Jahr'].tolist(),
-                ticktext=[str(j) for j in yearly_gesamt['Jahr'].tolist()]
+    with tab1:
+        # Gesamt: Sum of both directions
+        stats_total = con.execute(f"""
+            WITH RawSums AS (
+                SELECT t.Jahr, t.Datum_Tag_Str, SUM(t.Anzahl) as DaySum
+                FROM traffic t
+                -- Apply User Filters
+                WHERE {final_where}
+                -- Filter for Valid Days (Both Directions Valid)
+                AND t.Datum_Tag_Str IN (SELECT Datum_Tag_Str FROM valid_days)
+                GROUP BY 1, 2
             )
-        )
-        st.plotly_chart(fig_yearly_gesamt, use_container_width=True)
-        st.caption("📊 Gesamtverkehr (beide Richtungen). Die Fehlerbalken zeigen das minimale und maximale Tagesmittel pro Jahr.")
-    
-    with tab_dtv:
-        # Farben für Richtungen (Bucheggplatz=blau, Hardbrücke=rot)
-        richtung_farben = {'Bucheggplatz': '#3498db', 'Hardbrücke': '#e74c3c'}
-        richtungen_liste = yearly['Richtung'].unique().tolist()
+            SELECT 
+                Jahr, 
+                AVG(DaySum) as DTV, 
+                MIN(DaySum) as MinVal, 
+                MAX(DaySum) as MaxVal,
+                arg_min(Datum_Tag_Str, DaySum) as MinDate,
+                arg_max(Datum_Tag_Str, DaySum) as MaxDate
+            FROM RawSums 
+            GROUP BY 1 ORDER BY 1
+        """).df()
         
-        fig_yearly = go.Figure()
-        
-        # Für jede Richtung Balken mit Error-Bars hinzufügen
-        for richtung in richtungen_liste:
-            richtung_data = yearly[yearly['Richtung'] == richtung]
-            farbe = richtung_farben.get(richtung, '#3498db')
-            
-            # Berechne die Abstände für asymmetrische Error-Bars
-            error_minus = richtung_data['Anzahl'] - richtung_data['Min']
-            error_plus = richtung_data['Max'] - richtung_data['Anzahl']
-            
-            fig_yearly.add_trace(go.Bar(
-                x=richtung_data['Jahr'],
-                y=richtung_data['Anzahl'],
-                name=richtung,
-                marker_color=farbe,
-                text=richtung_data['Anzahl_fmt'],
-                textposition='outside',
+        if not stats_total.empty:
+            fig_yr = go.Figure()
+
+            # Error bars (asymmetric)
+            error_minus = stats_total['DTV'] - stats_total['MinVal']
+            error_plus = stats_total['MaxVal'] - stats_total['DTV']
+
+            # Format dates nicely? Datum_Tag_Str is usually YYYY-MM-DD.
+            # We can keep it as is or format. DuckDB arg_min returns the value.
+
+            fig_yr.add_trace(go.Bar(
+                x=stats_total['Jahr'], 
+                y=stats_total['DTV'],
                 error_y=dict(
                     type='data',
                     symmetric=False,
@@ -1037,112 +934,162 @@ def main():
                     thickness=1.5,
                     width=4
                 ),
-                customdata=np.column_stack([
-                    richtung_data['Anzahl_fmt'], 
-                    richtung_data['Min_fmt'], 
-                    richtung_data['Max_fmt'],
-                    richtung_data['Min_Datum_fmt'],
-                    richtung_data['Max_Datum_fmt']
-                ]),
-                hovertemplate='Ø: %{customdata[0]}<br>Min: %{customdata[1]} (%{customdata[3]})<br>Max: %{customdata[2]} (%{customdata[4]})<extra></extra>'
+                text=stats_total['DTV'].apply(format_number),
+                textposition='auto',
+                marker_color='#85c1e9', # Match OGD color
+                name='DTV',
+                hovertemplate='Ø: %{y:.0f}<br>Min: %{customdata[0]} am %{customdata[2]}<br>Max: %{customdata[1]} am %{customdata[3]}<extra></extra>',
+                customdata=np.stack((stats_total['MinVal'], stats_total['MaxVal'], stats_total['MinDate'], stats_total['MaxDate']), axis=-1)
             ))
+            fig_yr.update_layout(
+                yaxis_title="Fahrzeuge / Tag", 
+                hovermode="x unified",
+                xaxis=dict(tickmode='linear')
+            )
+            st.plotly_chart(fig_yr, use_container_width=True)
+            st.caption("📊 Gesamtverkehr (beide Richtungen). Die Fehlerbalken zeigen das minimale und maximale Tagesmittel pro Jahr (nur vollständig erfasste Tage).")
+        else:
+            st.warning("Keine vollständigen Tage für diese Auswahl.")
+
+    with tab2:
+        # Per Direction: Filter also by ValidDays (Both directions valid per day required by user)
+        stats_dir = con.execute(f"""
+            WITH RawSumsDir AS (
+                SELECT t.Jahr, t.Datum_Tag_Str, t.Richtung, SUM(t.Anzahl) as DaySum
+                FROM traffic t
+                WHERE {final_where}
+                -- Filter for Valid Days (Both Directions Valid)
+                AND t.Datum_Tag_Str IN (SELECT Datum_Tag_Str FROM valid_days)
+                GROUP BY 1, 2, 3
+                HAVING SUM(t.Anzahl) > 0
+            )
+            SELECT 
+                Jahr, Richtung,
+                AVG(DaySum) as DTV, 
+                MIN(DaySum) as MinVal, 
+                MAX(DaySum) as MaxVal,
+                arg_min(Datum_Tag_Str, DaySum) as MinDate,
+                arg_max(Datum_Tag_Str, DaySum) as MaxDate
+            FROM RawSumsDir 
+            GROUP BY 1, 2 ORDER BY 1, 2
+        """).df()
         
-        fig_yearly.update_layout(
-            barmode='group',
-            xaxis_title='',
-            yaxis_title='Ø Fahrzeuge/Tag',
-            legend_title='Richtung'
-        )
-        st.plotly_chart(fig_yearly, use_container_width=True)
-        st.caption("📊 Die Fehlerbalken zeigen das minimale und maximale Tagesmittel pro Jahr.")
+        if not stats_dir.empty:
+            # We construct the figure manually to support error bars per group
+            fig_dir = go.Figure()
+            
+            richt_colors = {'Bucheggplatz': '#3498db', 'Hardbrücke': '#e74c3c'}
+            
+            for richtung in stats_dir['Richtung'].unique():
+                df_r = stats_dir[stats_dir['Richtung'] == richtung]
+                err_min = df_r['DTV'] - df_r['MinVal']
+                err_plus = df_r['MaxVal'] - df_r['DTV']
+                
+                fig_dir.add_trace(go.Bar(
+                    x=df_r['Jahr'], y=df_r['DTV'],
+                    name=richtung,
+                    marker_color=richt_colors.get(richtung, '#95a5a6'),
+                    text=df_r['DTV'].apply(format_number),
+                    textposition='auto',
+                    error_y=dict(
+                        type='data', symmetric=False,
+                        array=err_plus, arrayminus=err_min,
+                        thickness=1.5, width=4
+                    ),
+                    hovertemplate='Ø: %{y:.0f}<br>Min: %{customdata[0]} am %{customdata[2]}<br>Max: %{customdata[1]} am %{customdata[3]}<extra></extra>',
+                    customdata=np.stack((df_r['MinVal'], df_r['MaxVal'], df_r['MinDate'], df_r['MaxDate']), axis=-1)
+                ))
+            
+            fig_dir.update_layout(barmode='group', yaxis_title="Fahrzeuge / Tag", hovermode="x unified")
+            st.plotly_chart(fig_dir, use_container_width=True)
+            st.caption("Aufsplittung nach Fahrtrichtung (Min/Max Tageswerte basierend auf vollständig erfassten Tagen).")
     
     with tab_total:
-        yearly_sum = filtered.groupby(['Jahr', 'Richtung'])['Anzahl'].sum().reset_index()
-        yearly_sum['Anzahl_fmt'] = yearly_sum['Anzahl'].apply(lambda x: format_number_ch(x))
-        yearly_total_sum = filtered.groupby('Jahr')['Anzahl'].sum().reset_index()
+        # Simple Sum
+        total_sums = con.execute(f"""
+            SELECT Jahr, SUM(Anzahl) as Total 
+            FROM traffic 
+            WHERE {final_where} 
+            GROUP BY 1 ORDER BY 1
+        """).df()
         
-        cols_total = st.columns(len(selected_jahre))
-        for i, jahr in enumerate(sorted(selected_jahre)):
-            with cols_total[i]:
-                corr_data = next((c for c in yearly_corrected if c['Jahr'] == jahr), None)
-                total_val = yearly_total_sum[yearly_total_sum['Jahr'] == jahr]['Anzahl'].values
-                if len(total_val) > 0 and corr_data:
-                    formatted_total = format_number(total_val[0])
-                    gap_days = corr_data['Tage_Lücken']
-                    tage_daten = corr_data['Tage_Daten']
-                    if gap_days > 1:
-                        schaetzung = total_val[0] * (365 / tage_daten) if tage_daten > 0 else total_val[0]
-                        st.metric(label=f"{jahr}", value=formatted_total,
-                                  help=f"Gemessene Fahrzeuge | {tage_daten} Tage mit Daten")
-                        st.caption(f"Hochrechnung: ~{format_number(schaetzung)}")
-                    else:
-                        st.metric(label=f"{jahr}", value=formatted_total,
-                                  help=f"Gemessene Fahrzeuge | {tage_daten} Tage mit Daten")
-        
-        fig_yearly_sum = px.bar(
-            yearly_sum, x='Jahr', y='Anzahl', color='Richtung', barmode='group',
-            labels={'Jahr': '', 'Anzahl': 'Fahrzeuge gesamt', 'Richtung': 'Richtung'},
-            text='Anzahl_fmt', color_discrete_sequence=['#3498db', '#e74c3c'], custom_data=['Anzahl_fmt']
-        )
-        fig_yearly_sum.update_traces(textposition='outside', hovertemplate='%{customdata[0]}<extra></extra>')
-        st.plotly_chart(fig_yearly_sum, use_container_width=True)
-        st.caption("💡 **Hinweis:** Die Gesamtzahlen sind bei Datenlücken nicht direkt vergleichbar.")
-    
-    # Zeile 6: Datenqualität
+        fig_tot = px.bar(total_sums, x='Jahr', y='Total', text_auto='.2s')
+        fig_tot.update_traces(marker_color='#9b59b6')
+        st.plotly_chart(fig_tot, use_container_width=True)
+        st.caption("Summe aller gezählten Fahrzeuge (ohne Hochrechnung bei Lücken oftmals ungenau).")
+
+    # 8. Data Quality Detail
     st.markdown("---")
-    st.subheader("⚠️ Datenqualität & Lücken")
+    st.subheader("Details: Datenqualität & Lücken")
     
-    gap_analysis = analyze_data_gaps(data)
-    significant_gaps = [g for g in gap_analysis['gaps'] if g['duration_h'] > 1 and not g['is_dst']]
-    total_gap_hours = sum(g['duration_h'] for g in significant_gaps)
+    # Gap Analysis Table
+    gap_df = con.execute(f"""
+        WITH timestamps AS (
+            SELECT DISTINCT Datum_Obs 
+            FROM traffic 
+            WHERE Jahr IN ({years_str})
+        ),
+        gaps AS (
+            SELECT 
+                Datum_Obs as GapStart,
+                LEAD(Datum_Obs) OVER (ORDER BY Datum_Obs) as GapEnd,
+                date_diff('minute', Datum_Obs, LEAD(Datum_Obs) OVER (ORDER BY Datum_Obs)) as GapMinutes
+            FROM timestamps
+        )
+        SELECT 
+            GapStart, 
+            GapEnd, 
+            GapMinutes / 60.0 as GapHours 
+        FROM gaps 
+        WHERE GapMinutes > 60 
+        ORDER BY GapHours DESC
+    """).df()
     
-    col_gap1, col_gap2, col_gap3 = st.columns(3)
-    with col_gap1:
-        st.metric("Datenlücken (>1h)", f"{len(significant_gaps)}")
-    with col_gap2:
-        st.metric("Fehlende Stunden", format_number(total_gap_hours))
-    with col_gap3:
-        st.metric("Fehlende Tage", f"{total_gap_hours/24:.1f}")
+    dq_tab1, dq_tab2 = st.tabs(["Datenlücken", "Vollständigkeit pro Jahr"])
     
-    tab_gaps, tab_yearly = st.tabs(["Datenlücken", "Vollständigkeit pro Jahr"])
-    
-    with tab_gaps:
-        if significant_gaps:
-            gap_df = pd.DataFrame([{
-                'Von': g['start'].strftime('%d.%m.%Y %H:%M'),
-                'Bis': g['end'].strftime('%d.%m.%Y %H:%M'),
-                'Dauer': f"{g['duration_h']:.1f}h" if g['duration_h'] < 24 else f"{g['duration_h']/24:.1f} Tage",
-                'Jahr': g['start'].year
-            } for g in significant_gaps])
-            st.dataframe(gap_df, use_container_width=True, hide_index=True)
-        else:
-            st.success("Keine signifikanten Datenlücken gefunden.")
+    with dq_tab1:
+        col_metrics, col_table = st.columns([1, 2])
         
-        dst_gaps = [g for g in gap_analysis['gaps'] if g['is_dst']]
-        if dst_gaps:
-            st.info(f"ℹ️ {len(dst_gaps)} Lücken durch Zeitumstellung (Sommerzeit) – diese sind normal.")
-    
-    with tab_yearly:
-        yearly_df = pd.DataFrame([{
-            'Jahr': s['jahr'],
-            'Zeitraum': f"{s['start'].strftime('%d.%m.')} – {s['end'].strftime('%d.%m.')}",
-            'Vollständigkeit': f"{s['completeness']:.1f}%",
-            'Fehlende Tage': f"{s['gap_days']:.1f}" if s['gap_days'] > 0 else "–"
-        } for s in gap_analysis['yearly_stats']])
-        st.dataframe(yearly_df, use_container_width=True, hide_index=True)
+        with col_metrics:
+            matches_gaps = len(gap_df)
+            total_missing_hours = gap_df['GapHours'].sum()
+            total_missing_days = total_missing_hours / 24.0
+            
+            st.metric("Datenlücken (>1h)", matches_gaps)
+            st.metric("Fehlende Stunden Total", f"{total_missing_hours:.1f} h")
+            st.metric("Fehlende Tage Total", f"{total_missing_days:.1f} d")
         
-        if significant_gaps:
-            biggest = max(significant_gaps, key=lambda x: x['duration_h'])
-            st.warning(f"⚠️ Grösste Datenlücke: **{biggest['start'].strftime('%d.%m.%Y')} – "
-                       f"{biggest['end'].strftime('%d.%m.%Y')}** ({biggest['duration_h']/24:.0f} Tage)")
-    
+        with col_table:
+            if not gap_df.empty:
+                gap_show = gap_df.copy()
+                gap_show['Dauer'] = gap_show['GapHours'].apply(lambda x: f"{x:.1f} h" if x < 24 else f"{x/24:.1f} Tage")
+                st.dataframe(gap_show[['GapStart', 'GapEnd', 'Dauer']], height=300, hide_index=True)
+            else:
+                st.success("Keine Lücken > 1 Stunde gefunden.")
+
+    with dq_tab2:
+        # Yearly completeness table
+        if not quality_stats.empty:
+            qs_show = quality_stats.copy()
+            qs_show['Vollständigkeit'] = qs_show.apply(
+                lambda r: (1 - (r['MissingHours'] / r['TotalHoursSpan'])) * 100, axis=1
+            ).map('{:.2f}%'.format)
+            st.dataframe(qs_show[['Jahr', 'ActualHours', 'MissingHours', 'Vollständigkeit']], hide_index=True)
+
+
+
     # Footer
     st.markdown("---")
+    
+    # Get max date for display
+    max_date_label = con.execute("SELECT MAX(Datum_Obs) FROM traffic").fetchone()[0]
+    last_update_str = max_date_label.strftime('%d.%m.%Y') if max_date_label else "Unbekannt"
+    
     st.caption(
         f"Datenquelle: [Open Data Zürich](https://data.stadt-zuerich.ch/dataset/ugz_verkehrsdaten_stundenwerte_rosengartenbruecke) | "
         f"Standort: Rosengartenstrasse 18, 8037 Zürich | "
         f"Intervall: 1 Stunde | "
-        f"Letzte Aktualisierung: {filtered['Datum'].max().strftime('%d.%m.%Y')}"
+        f"Letzte Aktualisierung im Datensatz: {last_update_str}"
     )
 
 

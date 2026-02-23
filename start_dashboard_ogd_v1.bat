@@ -26,6 +26,6 @@ echo.
 echo Druecken Sie Ctrl+C zum Beenden.
 echo.
 
-.venv\Scripts\streamlit.exe run dashboard_duckdb.py --server.port=8504
+.venv\Scripts\streamlit.exe run dashboard_ogd.py --server.port=8503
 
 pause

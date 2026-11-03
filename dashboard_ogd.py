@@ -91,14 +91,13 @@ def init_duckdb(con, parquet_path):
         CREATE OR REPLACE TABLE traffic AS 
         SELECT 
             *,
-            CAST(Datum AS TIMESTAMP) as Datum_Obs,
-            year(Datum) as Jahr,
-            month(Datum) as Monat,
-            day(Datum) as Tag,
-            dayofweek(Datum) as Wochentag_ISO,
-            hour(Datum) as Stunde,
-            week(Datum) as Kalenderwoche,
-            strftime(Datum, '%Y-%m-%d') as Datum_Tag_Str,
+            year(Datum_Obs) as Jahr,
+            month(Datum_Obs) as Monat,
+            day(Datum_Obs) as Tag,
+            dayofweek(Datum_Obs) as Wochentag_ISO,
+            hour(Datum_Obs) as Stunde,
+            week(Datum_Obs) as Kalenderwoche,
+            strftime(Datum_Obs, '%Y-%m-%d') as Datum_Tag_Str,
             CASE 
                 WHEN "Klasse.Text" IN ('Motorrad') THEN 'Motorrad'
                 WHEN "Klasse.Text" IN ('Personenwagen', 'Personenwagen mit Anhänger') THEN 'Personenwagen'
@@ -107,7 +106,10 @@ def init_duckdb(con, parquet_path):
                 WHEN "Klasse.Text" IN ('Bus', 'Trolleybus') THEN 'Bus/Trolleybus'
                 ELSE 'Unbekannt'
             END as Kategorie
-        FROM read_parquet('{parquet_path.replace(os.sep, '/')}')
+        FROM (
+            SELECT *, CAST(Datum AS TIMESTAMPTZ) AT TIME ZONE 'Etc/GMT-1' AS Datum_Obs
+            FROM read_parquet('{parquet_path.replace(os.sep, '/')}')
+        )
     """)
     
     con.execute("""
